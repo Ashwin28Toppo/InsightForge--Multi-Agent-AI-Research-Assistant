@@ -29,7 +29,7 @@ def test_rag_defaults_without_env_file():
     s = Settings(_env_file=None)
     assert s.google_api_key == ""
     assert s.embedding_provider == "google"
-    assert s.embedding_model == "text-embedding-004"
+    assert s.embedding_model == "gemini-embedding-2"
     assert s.embedding_dim == 768
     assert s.qdrant_path == "./qdrant_storage"
     assert s.qdrant_collection == "insightforge_documents"

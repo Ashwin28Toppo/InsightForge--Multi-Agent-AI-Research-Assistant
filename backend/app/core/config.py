@@ -42,7 +42,7 @@ class Settings(BaseSettings):
 
     # ── Embeddings ────────────────────────────────────────────────────────
     embedding_provider: str = "google"
-    embedding_model: str = "text-embedding-004"
+    embedding_model: str = "gemini-embedding-2"
     embedding_dim: int = 768
 
     # ── Qdrant vector store ───────────────────────────────────────────────
