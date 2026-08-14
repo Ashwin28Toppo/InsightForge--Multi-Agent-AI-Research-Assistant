@@ -25,7 +25,10 @@ def test_tavily_key_reads_canonical_name(monkeypatch):
     assert s.tavily_api_key == "canonical-key"
 
 
-def test_rag_defaults_without_env_file():
+def test_rag_defaults_without_env_file(monkeypatch):
+    # Make the test independent of any real API keys in the environment/.env.
+    for key in ("GOOGLE_API_KEY", "GROQ_API_KEY", "TAVILY_API_KEY", "TAVILY_KEY_KEY"):
+        monkeypatch.delenv(key, raising=False)
     s = Settings(_env_file=None)
     assert s.google_api_key == ""
     assert s.embedding_provider == "google"
