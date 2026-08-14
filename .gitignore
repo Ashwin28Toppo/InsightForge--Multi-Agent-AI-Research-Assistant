@@ -9,6 +9,11 @@ venv/
 # Environment Variables
 .env
 
+# RAG / local storage
+qdrant_storage/
+data/
+backend/storage/
+
 # IDE
 .vscode/
 .idea/

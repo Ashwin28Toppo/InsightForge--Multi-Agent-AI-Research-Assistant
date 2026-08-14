@@ -28,6 +28,7 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("TAVILY_API_KEY", "TAVILY_KEY_KEY"),
     )
+    google_api_key: str = ""
 
     # ── LLM ───────────────────────────────────────────────────────────────
     llm_model: str = "llama-3.3-70b-versatile"
@@ -38,6 +39,29 @@ class Settings(BaseSettings):
     tavily_max_results: int = 5
     scrape_max_chars: int = 3000
     scrape_timeout: int = 8
+
+    # ── Embeddings ────────────────────────────────────────────────────────
+    embedding_provider: str = "google"
+    embedding_model: str = "text-embedding-004"
+    embedding_dim: int = 768
+
+    # ── Qdrant vector store ───────────────────────────────────────────────
+    # Local embedded mode (path) is the Phase 2 default; QDRANT_URL is
+    # optional and reserved for switching to a remote/server Qdrant later.
+    qdrant_path: str = "./qdrant_storage"
+    qdrant_url: str | None = None
+    qdrant_collection: str = "insightforge_documents"
+
+    # ── Document chunking ─────────────────────────────────────────────────
+    chunk_size: int = 1000
+    chunk_overlap: int = 150
+
+    # ── Retrieval ─────────────────────────────────────────────────────────
+    retrieval_top_k: int = 5
+    retrieval_score_threshold: float = 0.5
+
+    # ── Storage ───────────────────────────────────────────────────────────
+    document_storage_dir: str = "./data/documents"
 
 
 settings = Settings()
