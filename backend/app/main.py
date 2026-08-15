@@ -1,11 +1,11 @@
 """Core research pipeline for InsightForge.
 
-Owns the orchestration that previously lived inside the Streamlit app
-(``app.py``). This module is UI-agnostic so it can be reused by a CLI,
-Streamlit, and (in later phases) FastAPI.
+Owns the application's research execution path. This module is UI-agnostic so
+it can be reused by a CLI, Streamlit, and (in later phases) FastAPI.
 
-The current implementation is a sequential Python pipeline; it will be
-replaced by a LangGraph ``StateGraph`` in a later phase.
+All orchestration is delegated to the compiled LangGraph
+(``backend.app.graph.graph``); this module only passes the user's query into
+the graph and maps the final state to the application's result contract.
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from langchain.agents import create_agent
 from backend.app.agents.critic import critic_chain
 from backend.app.agents.llm import get_llm
 from backend.app.agents.writer import writer_chain
+from backend.app.graph.graph import research_graph
 from backend.app.graph.state import ResearchState
 from backend.app.tools.web import extract_urls, scrape_url, web_search
 
@@ -38,68 +39,42 @@ def build_research_context(search_results: str, extracted_information: str) -> s
     )
 
 
+def _to_application_result(state: dict) -> ResearchState:
+    """Map the compiled graph's final state to the application result contract.
+
+    The app expects the final report under ``report``, while the graph stores
+    the writer output as ``report_draft``; all other keys pass through.
+    """
+    mapped: ResearchState = dict(state)
+    if "report_draft" in mapped:
+        mapped["report"] = mapped["report_draft"]
+    mapped.setdefault("errors", [])
+    return mapped
+
+
 def run_research_pipeline(
     query: str,
     on_step: Optional[Callable[[str], None]] = None,
 ) -> ResearchState:
-    """Run the full research pipeline: search → extract → write → critique.
+    """Run the full research workflow through the compiled LangGraph.
+
+    The graph owns all orchestration (plan → research → evidence →
+    claim_extraction → fact_check → citation → confidence → writer → critic →
+    conditional routing); this function only passes the query into the graph
+    and maps the final state to the application's result contract.
 
     Args:
         query: The research topic.
-        on_step: Optional callback invoked with the current step name
-            (``"search"``, ``"reader"``, ``"writer"``, ``"critic"``) before
-            each stage, so the UI can surface progress.
+        on_step: Accepted for backward compatibility with the previous
+            sequential pipeline; unused because the graph owns orchestration
+            (per-node progress events are a later streaming step).
 
     Returns:
-        A completed :class:`ResearchState`.
+        The application-level result (``report``, ``search_results``,
+        ``sources``, ``critic_feedback``, etc.).
     """
-    state: ResearchState = {"query": query, "errors": []}
-
-    # ── Step 1: Search agent ──────────────────────────────────────────────
-    if on_step:
-        on_step("search")
-    search_agent = build_search_agent()
-    search_result = search_agent.invoke({
-        "messages": [("user", f"Find recent, reliable and detailed information about: {query}")]
-    })
-    state["search_results"] = search_result["messages"][-1].content
-    # The final message is a prose summary; the actual URLs live in the
-    # intermediate tool-result messages, so scan the whole history.
-    all_messages_text = "\n".join(
-        m.content for m in search_result["messages"] if isinstance(m.content, str)
-    )
-    state["sources"] = extract_urls(all_messages_text)
-
-    # ── Step 2: Reader agent (extraction) ─────────────────────────────────
-    if on_step:
-        on_step("reader")
-    reader_agent = build_reader_agent()
-    reader_result = reader_agent.invoke({
-        "messages": [("user",
-            f"Based on the following search results about '{query}', "
-            f"pick the most relevant URL and scrape it for deeper content.\n\n"
-            f"Search Results:\n{state['search_results'][:800]}"
-        )]
-    })
-    state["extracted_information"] = reader_result["messages"][-1].content
-
-    # ── Step 3: Writer chain ──────────────────────────────────────────────
-    if on_step:
-        on_step("writer")
-    research_combined = build_research_context(
-        state["search_results"], state["extracted_information"]
-    )
-    state["report"] = writer_chain.invoke({
-        "topic": query,
-        "research": research_combined,
-    })
-
-    # ── Step 4: Critic chain ──────────────────────────────────────────────
-    if on_step:
-        on_step("critic")
-    state["critic_feedback"] = critic_chain.invoke({"report": state["report"]})
-
-    return state
+    state = research_graph.invoke({"query": query})
+    return _to_application_result(state)
 
 
 if __name__ == "__main__":
