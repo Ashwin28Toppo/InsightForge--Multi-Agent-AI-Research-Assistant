@@ -26,6 +26,7 @@ PHASE_2B_FIELDS = {
     "research_plan",
     "retrieved_chunks",
     "evidence",
+    "claims",
     "fact_checks",
     "confidence",
     "citations",

@@ -1,4 +1,4 @@
-"""Unit tests for the research StateGraph (Phase 2C Steps 2-3).
+"""Unit tests for the research StateGraph (Phase 2C Steps 2-4).
 
 Offline: graph execution uses fake node functions patched into
 ``backend.app.graph.nodes``; the real graph is only built (never executed with
@@ -12,7 +12,7 @@ import backend.app.graph.graph as graph_mod
 import backend.app.graph.nodes as nodes
 
 NODE_NAMES = [
-    "plan", "research", "evidence", "fact_check",
+    "plan", "research", "evidence", "claim_extraction", "fact_check",
     "citation", "confidence", "writer", "critic",
 ]
 
@@ -21,7 +21,8 @@ EXPECTED_EDGES = [
     ("__start__", "plan"),
     ("plan", "research"),
     ("research", "evidence"),
-    ("evidence", "fact_check"),
+    ("evidence", "claim_extraction"),
+    ("claim_extraction", "fact_check"),
     ("fact_check", "citation"),
     ("citation", "confidence"),
     ("confidence", "writer"),
@@ -93,11 +94,24 @@ def test_linear_chain_edges_preserved():
     edges = edge_pairs(graph_mod.build_research_graph())
     chain = [
         ("__start__", "plan"), ("plan", "research"), ("research", "evidence"),
-        ("evidence", "fact_check"), ("fact_check", "citation"),
-        ("citation", "confidence"), ("confidence", "writer"), ("writer", "critic"),
+        ("evidence", "claim_extraction"), ("claim_extraction", "fact_check"),
+        ("fact_check", "citation"), ("citation", "confidence"),
+        ("confidence", "writer"), ("writer", "critic"),
     ]
     for source, target in chain:
         assert (source, target) in edges
+
+
+def test_evidence_connects_to_claim_extraction():
+    assert ("evidence", "claim_extraction") in edge_pairs(graph_mod.build_research_graph())
+
+
+def test_claim_extraction_connects_to_fact_check():
+    assert ("claim_extraction", "fact_check") in edge_pairs(graph_mod.build_research_graph())
+
+
+def test_no_direct_evidence_to_fact_check_edge():
+    assert ("evidence", "fact_check") not in edge_pairs(graph_mod.build_research_graph())
 
 
 def test_critic_has_conditional_routing():
@@ -264,7 +278,8 @@ def test_node_outputs_appear_in_final_state(monkeypatch):
         "plan": {"research_plan": {"research_angles": ["a"], "use_rag": False}},
         "research": {"search_results": "text", "sources": ["https://a.com"]},
         "evidence": {"evidence": [{"id": "E1", "source_type": "web", "text": "t", "title": "T", "score": 0.8}]},
-        "fact_check": {"fact_checks": [{"claim": "c", "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}]},
+        "claim_extraction": {"claims": ["claim one", "claim two"]},
+        "fact_check": {"fact_checks": [{"claim": "claim one", "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}]},
         "citation": {"citations": [{"index": 1, "source_type": "web", "title": "T", "url": "https://a.com",
                                     "document_id": None, "page": None, "chunk_index": None}]},
         "confidence": {"confidence": "high"},
@@ -280,6 +295,7 @@ def test_node_outputs_appear_in_final_state(monkeypatch):
     assert result["search_results"] == "text"
     assert result["sources"] == ["https://a.com"]
     assert result["evidence"][0]["id"] == "E1"
+    assert result["claims"] == ["claim one", "claim two"]
     assert result["fact_checks"][0]["verdict"] == "supported"
     assert result["citations"][0]["index"] == 1
     assert result["confidence"] == "high"
@@ -295,6 +311,26 @@ def test_minimal_query_executes_with_fake_nodes(monkeypatch):
     result = graph_mod.build_research_graph().invoke({"query": "q"})
     assert result["query"] == "q"
     assert result["confidence"] == "high"
+
+
+def test_fact_checks_are_generated_from_extracted_claims(monkeypatch):
+    # The real claim_extraction_node runs with a monkeypatched extractor.
+    monkeypatch.setattr(nodes, "extract_claims", lambda research, evidence: ["extracted claim"])
+    updates = {
+        "evidence": {"evidence": [{"id": "E1", "source_type": "web", "text": "t", "title": "T", "score": 0.8}]},
+        "fact_check": {"fact_checks": [{"claim": "extracted claim", "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}]},
+        "confidence": {"confidence": "high"},
+    }
+    for name in NODE_NAMES:
+        if name == "claim_extraction":
+            continue  # keep the real node (uses the monkeypatched extractor)
+        update = updates.get(name, {})
+        monkeypatch.setattr(nodes, f"{name}_node", make_fake(name, update))
+
+    result = graph_mod.build_research_graph().invoke({"query": "q"})
+
+    assert result["claims"] == ["extracted claim"]
+    assert result["fact_checks"][0]["claim"] == "extracted claim"
 
 
 def test_node_errors_propagate_normally(monkeypatch):

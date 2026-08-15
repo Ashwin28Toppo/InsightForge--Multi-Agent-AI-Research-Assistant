@@ -88,6 +88,7 @@ class ResearchState(TypedDict, total=False):
     research_plan: ResearchPlan
     retrieved_chunks: list[RetrievedChunk]
     evidence: list[EvidenceItem]
+    claims: list[str]
     fact_checks: list[FactCheck]
     confidence: str
     citations: list[Citation]

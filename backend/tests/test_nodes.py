@@ -161,6 +161,95 @@ def test_evidence_node_empty_research_returns_empty_evidence():
     assert out == {"evidence": []}
 
 
+# ── claim_extraction_node ────────────────────────────────────────────────────
+
+def test_claim_extraction_node_calls_extractor_with_research_and_evidence(monkeypatch):
+    evidence = [{"id": "E1", "source_type": "web", "text": "t", "title": "T", "score": 0.8}]
+    captured = {}
+
+    def fake_extract(research, evidence):
+        captured["research"] = research
+        captured["evidence"] = evidence
+        return ["claim one", "claim two"]
+
+    monkeypatch.setattr(nodes, "extract_claims", fake_extract)
+    state = base_state(
+        search_results="search text",
+        extracted_information="scraped text",
+        evidence=evidence,
+    )
+
+    out = nodes.claim_extraction_node(state)
+
+    assert "search text" in captured["research"]
+    assert "scraped text" in captured["research"]
+    assert captured["evidence"] == evidence
+    assert out == {"claims": ["claim one", "claim two"]}
+    assert state == snapshot(state)  # not mutated
+
+
+def test_claim_extraction_node_missing_research_handled(monkeypatch):
+    captured = {}
+
+    def fake_extract(research, evidence):
+        captured["research"] = research
+        captured["evidence"] = evidence
+        return ["only evidence claim"]
+
+    monkeypatch.setattr(nodes, "extract_claims", fake_extract)
+    evidence = [{"id": "E1", "source_type": "rag", "text": "chunk", "title": "a.txt", "score": 0.7}]
+
+    out = nodes.claim_extraction_node(base_state(evidence=evidence))
+
+    assert captured["research"] == ""
+    assert captured["evidence"] == evidence
+    assert out == {"claims": ["only evidence claim"]}
+
+
+def test_claim_extraction_node_empty_claims_returns_empty():
+    # No research/evidence -> real extract_claims returns [] without an LLM call.
+    out = nodes.claim_extraction_node(base_state())
+    assert out == {"claims": []}
+
+
+# ── fact_check_node (state claims) ───────────────────────────────────────────
+
+def test_fact_check_node_consumes_state_claims(monkeypatch):
+    evidence = [{"id": "E1", "source_type": "web", "text": "t", "title": "T", "score": 0.8}]
+    captured = {}
+
+    def fake_check(claims, evidence_):
+        captured["claims"] = claims
+        captured["evidence"] = evidence_
+        return [{"claim": "c", "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}]
+
+    monkeypatch.setattr(nodes, "fact_check_claims", fake_check)
+    state = base_state(claims=["state claim"], evidence=evidence)
+
+    out = nodes.fact_check_node(state)
+
+    assert captured["claims"] == ["state claim"]
+    assert captured["evidence"] == evidence
+    assert out["fact_checks"][0]["verdict"] == "supported"
+    assert state == snapshot(state)
+
+
+def test_fact_check_node_without_state_claims_returns_empty(monkeypatch):
+    called = []
+
+    def fake_check(claims, evidence_):
+        called.append(claims)
+        return []
+
+    monkeypatch.setattr(nodes, "fact_check_claims", fake_check)
+    state = base_state(evidence=[{"id": "E1"}])  # no "claims" key
+
+    out = nodes.fact_check_node(state)
+
+    assert out == {"fact_checks": []}
+    assert called == []  # no LLM call when there are no claims
+
+
 # ── fact_check_node ──────────────────────────────────────────────────────────
 
 def test_fact_check_node_passes_claims_and_evidence(monkeypatch):

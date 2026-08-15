@@ -1,11 +1,11 @@
-"""Compiled LangGraph for the research workflow (Phase 2C Steps 2-3).
+"""Compiled LangGraph for the research workflow (Phase 2C Steps 2-4).
 
 Topology:
 
     START
       ↓
-    plan → research → evidence → fact_check → citation → confidence
-      → writer → critic → [conditional router]
+    plan → research → evidence → claim_extraction → fact_check
+      → citation → confidence → writer → critic → [conditional router]
         ├── complete             → END
         ├── insufficient         → END
         └── additional_research  → increment_rounds → research (bounded loop)
@@ -30,9 +30,8 @@ def _research_graph_node(state):
 
 
 def _fact_check_graph_node(state):
-    """Thin adapter: ResearchState has no claims field yet (claim extraction is
-    a later step), so fact_check_node runs with no claims and returns empty
-    fact checks — preserving the Phase 2C Step 1 behavior."""
+    """Thin adapter: fact_check_node consumes ``state["claims"]`` produced by
+    the claim extraction node (empty fact checks when no claims exist)."""
     return nodes.fact_check_node(state)
 
 
@@ -56,6 +55,7 @@ def build_research_graph():
     graph.add_node("plan", nodes.plan_node)
     graph.add_node("research", _research_graph_node)
     graph.add_node("evidence", nodes.evidence_node)
+    graph.add_node("claim_extraction", nodes.claim_extraction_node)
     graph.add_node("fact_check", _fact_check_graph_node)
     graph.add_node("citation", nodes.citation_node)
     graph.add_node("confidence", nodes.confidence_node)
@@ -66,7 +66,8 @@ def build_research_graph():
     graph.add_edge(START, "plan")
     graph.add_edge("plan", "research")
     graph.add_edge("research", "evidence")
-    graph.add_edge("evidence", "fact_check")
+    graph.add_edge("evidence", "claim_extraction")
+    graph.add_edge("claim_extraction", "fact_check")
     graph.add_edge("fact_check", "citation")
     graph.add_edge("citation", "confidence")
     graph.add_edge("confidence", "writer")

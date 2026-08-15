@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 
 from backend.app.agents.citation import generate_citations
+from backend.app.agents.claim_extractor import extract_claims
 from backend.app.agents.confidence import calculate_confidence
 from backend.app.agents.critic import critic_chain
 from backend.app.agents.evidence import merge_evidence, rag_chunk_to_evidence
@@ -175,22 +176,45 @@ def evidence_node(state: ResearchState) -> dict:
     return {"evidence": merged}
 
 
-# ── 4. Fact check node ───────────────────────────────────────────────────────
+# ── 4. Claim extraction node ─────────────────────────────────────────────────
+
+def _research_text_from_state(state: ResearchState) -> str:
+    """Assemble the raw research text from the state's research fields."""
+    parts: list[str] = []
+    for key in ("search_results", "extracted_information"):
+        value = state.get(key)
+        if value and str(value).strip():
+            parts.append(str(value).strip())
+    return "\n\n".join(parts)
+
+
+def claim_extraction_node(state: ResearchState) -> dict:
+    """Extract checkable claims from the research material and evidence."""
+    claims = extract_claims(
+        research=_research_text_from_state(state),
+        evidence=state.get("evidence") or [],
+    )
+    return {"claims": claims}
+
+
+# ── 5. Fact check node ───────────────────────────────────────────────────────
 
 def fact_check_node(state: ResearchState, claims=None) -> dict:
     """Fact-check claims against the state's evidence.
 
-    ``claims`` must be supplied explicitly (ResearchState has no claims field
-    yet — claim extraction is a later step). Returns empty fact checks when no
-    claims are provided.
+    Claims are read from ``state["claims"]`` (produced by the claim extraction
+    node) unless explicitly supplied via the ``claims`` parameter. Returns
+    empty fact checks when no claims are available.
     """
+    if claims is None:
+        claims = state.get("claims") or []
     if not claims:
         return {"fact_checks": []}
     checks = fact_check_claims(list(claims), state.get("evidence") or [])
     return {"fact_checks": checks}
 
 
-# ── 5. Citation node ─────────────────────────────────────────────────────────
+# ── 6. Citation node ─────────────────────────────────────────────────────────
 
 def citation_node(state: ResearchState) -> dict:
     """Generate deterministic citations from evidence + fact checks."""
@@ -201,7 +225,7 @@ def citation_node(state: ResearchState) -> dict:
     return {"citations": citations}
 
 
-# ── 6. Confidence node ───────────────────────────────────────────────────────
+# ── 7. Confidence node ───────────────────────────────────────────────────────
 
 def confidence_node(state: ResearchState) -> dict:
     """Compute the confidence label only (routing belongs to the graph)."""
@@ -213,7 +237,7 @@ def confidence_node(state: ResearchState) -> dict:
     return {"confidence": confidence}
 
 
-# ── 7. Writer node ───────────────────────────────────────────────────────────
+# ── 8. Writer node ───────────────────────────────────────────────────────────
 
 def _evidence_to_research_text(evidence) -> str:
     """Assemble the evidence list into the writer's ``research`` text block."""
@@ -236,7 +260,7 @@ def writer_node(state: ResearchState) -> dict:
     return {"report_draft": report}
 
 
-# ── 8. Critic node ───────────────────────────────────────────────────────────
+# ── 9. Critic node ───────────────────────────────────────────────────────────
 
 def _extract_critic_score(feedback: str) -> int | None:
     """Parse ``Score: X/10`` from the critic feedback (or None)."""
