@@ -1,21 +1,26 @@
 """FastAPI transport layer for the InsightForge research pipeline.
 
-This module is intentionally THIN: it exposes the existing application-layer
-entry point (``backend.app.main.run_research_pipeline``) over HTTP and contains
-no research/business logic. Orchestration stays in the compiled LangGraph
-(``backend.app.graph.graph``); nothing here creates a graph, agent, chain, or
-tool.
+Thin transport layer (Phase 2D Steps 1-2). Research execution is delegated to
+``backend.app.main.run_research_pipeline``; this module only owns job lifecycle
+management over an in-memory job store (queued -> running -> completed | failed).
 
 Endpoints:
-    GET  /health    - liveness probe (never executes the pipeline).
-    POST /research  - run the existing research pipeline for a query.
+    GET  /health             - liveness probe (never runs the pipeline).
+    POST /research           - create an async research job (HTTP 202 + job_id).
+    GET  /research/{job_id}  - current job status/result.
 """
 from __future__ import annotations
 
-from fastapi import FastAPI
+import logging
+import threading
+from uuid import uuid4
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel, field_validator
 
 from backend.app.main import run_research_pipeline
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="InsightForge API",
@@ -23,8 +28,14 @@ app = FastAPI(
         "Multi-Agent AI Research Assistant — exposes the existing LangGraph "
         "research pipeline over HTTP. Thin transport layer only."
     ),
-    version="0.1.0",
+    version="0.2.0",
 )
+
+
+# ── In-memory job store (by design; jobs are lost on restart) ────────────────
+
+_jobs: dict[str, dict] = {}
+_lock = threading.Lock()
 
 
 class ResearchRequest(BaseModel):
@@ -41,18 +52,94 @@ class ResearchRequest(BaseModel):
         return stripped
 
 
+class ResearchJobResponse(BaseModel):
+    """Response returned immediately when a research job is submitted."""
+
+    job_id: str
+    status: str
+
+
+class ResearchStatusResponse(BaseModel):
+    """Current status of a research job (result only when completed)."""
+
+    job_id: str
+    status: str
+    result: dict | None = None
+    error: str | None = None
+
+
+def _run_job(job_id: str, query: str) -> None:
+    """Background worker: run the existing pipeline and store the outcome.
+
+    Lifecycle: queued -> running -> completed, or -> failed on exception.
+    Exceptions are never swallowed silently — they are logged and surfaced on
+    the job record as a safe error string.
+    """
+    with _lock:
+        job = _jobs.get(job_id)
+        if job is not None:
+            job["status"] = "running"
+
+    try:
+        result = run_research_pipeline(query)
+    except Exception as exc:
+        logger.exception("research job %s failed", job_id)
+        with _lock:
+            if job is not None:
+                job["status"] = "failed"
+                job["error"] = f"{type(exc).__name__}: {exc}"
+        return
+
+    with _lock:
+        if job is not None:
+            job["status"] = "completed"
+            job["result"] = result
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     """Liveness probe. Does not execute the research pipeline."""
     return {"status": "ok"}
 
 
-@app.post("/research")
-def research(request: ResearchRequest) -> dict:
-    """Run the existing research pipeline for the given query.
+@app.post("/research", status_code=202, response_model=ResearchJobResponse)
+def research(
+    request: ResearchRequest,
+    background_tasks: BackgroundTasks,
+) -> ResearchJobResponse:
+    """Submit a research job and return immediately with its job id.
 
-    Delegates to ``run_research_pipeline`` (the application layer), which owns
-    the compiled LangGraph orchestration. Returns the application result
-    unchanged — the API adds no fields of its own.
+    The pipeline runs in the background via ``BackgroundTasks``; the client
+    polls ``GET /research/{job_id}`` for the outcome.
     """
-    return run_research_pipeline(request.query)
+    job_id = str(uuid4())
+    with _lock:
+        _jobs[job_id] = {
+            "job_id": job_id,
+            "query": request.query,
+            "status": "queued",
+            "result": None,
+            "error": None,
+        }
+    background_tasks.add_task(_run_job, job_id, request.query)
+    return ResearchJobResponse(job_id=job_id, status="queued")
+
+
+@app.get(
+    "/research/{job_id}",
+    response_model=ResearchStatusResponse,
+    response_model_exclude_none=True,
+)
+def research_status(job_id: str) -> ResearchStatusResponse:
+    """Return the current status/result of a research job (404 if unknown)."""
+    with _lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    payload: dict = {"job_id": job["job_id"], "status": job["status"]}
+    if job["status"] == "completed":
+        payload["result"] = job["result"]
+    elif job["status"] == "failed":
+        payload["error"] = job["error"]
+    return ResearchStatusResponse(**payload)
