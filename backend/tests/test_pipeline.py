@@ -8,16 +8,27 @@ from backend.app.main import build_research_context
 class FakeGraph:
     """Minimal stand-in for the compiled research graph."""
 
-    def __init__(self, result=None, error=None):
+    def __init__(self, result=None, error=None, stream_updates=None):
         self.result = result
         self.error = error
         self.calls = []
+        self.stream_updates = stream_updates  # optional [(node, update), ...]
 
     def invoke(self, inputs):
         self.calls.append(inputs)
         if self.error is not None:
             raise self.error
         return self.result
+
+    def stream(self, inputs, **kwargs):
+        self.calls.append(inputs)
+        if self.error is not None:
+            raise self.error
+        if self.stream_updates:
+            for node, update in self.stream_updates:
+                yield {node: update}
+        else:
+            yield {"writer": self.result or {}}
 
 
 class _RaisingChain:
@@ -107,12 +118,37 @@ def test_graph_exceptions_are_not_swallowed(monkeypatch):
         main.run_research_pipeline("q")
 
 
-def test_on_step_parameter_accepted_for_compatibility(monkeypatch):
-    monkeypatch.setattr(main, "research_graph", FakeGraph(result={"query": "q", "report_draft": "d"}))
+def test_on_step_receives_live_node_progress(monkeypatch):
+    graph = FakeGraph(
+        result={"query": "q", "report_draft": "d"},
+        stream_updates=[
+            ("research", {"search_results": "r"}),
+            ("writer", {"report_draft": "d"}),
+        ],
+    )
+    monkeypatch.setattr(main, "research_graph", graph)
 
     on_step_calls = []
     result = main.run_research_pipeline("q", on_step=on_step_calls.append)
 
     assert result["report"] == "d"
-    # on_step is accepted (backward compatibility) but not driven by this module.
-    assert on_step_calls == []
+    assert on_step_calls == ["research", "writer"]
+
+
+def test_on_step_omitted_still_runs(monkeypatch):
+    graph = FakeGraph(result={"query": "q", "report_draft": "d"})
+    monkeypatch.setattr(main, "research_graph", graph)
+
+    result = main.run_research_pipeline("q")
+
+    assert result["report"] == "d"
+
+
+def test_build_search_agent_constrains_looping():
+    # Regression: the search agent must be told (and capped) so it cannot loop
+    # into many back-to-back searches, which inflated a single request past
+    # Groq's free-tier TPM budget (HTTP 413) and crashed the app.
+    agent = main.build_search_agent()
+    assert agent.__class__.__name__ == "CompiledStateGraph"
+    assert "exactly 1 search" in main._SEARCH_SYSTEM_PROMPT
+    assert "Do not call web_search more than once" in main._SEARCH_SYSTEM_PROMPT

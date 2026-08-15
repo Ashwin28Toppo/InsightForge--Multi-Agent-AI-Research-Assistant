@@ -11,9 +11,8 @@ Topology:
         └── additional_research  → increment_rounds → research (bounded loop)
 
 The router is a thin adapter over the existing ``route_research()``; the loop
-is bounded because ``route_research`` terminates once ``research_rounds >= 2``
-for non-high confidence. This module is orchestration only — no business logic
-lives here.
+is bounded by ``settings.research_loop_max_rounds`` (0 = single pass, the
+default). This module is orchestration only — no business logic lives here.
 """
 from __future__ import annotations
 

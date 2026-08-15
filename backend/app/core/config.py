@@ -31,9 +31,32 @@ class Settings(BaseSettings):
     google_api_key: str = ""
 
     # ── LLM ───────────────────────────────────────────────────────────────
-    llm_model: str = "llama-3.3-70b-versatile"
+    llm_model: str = "llama-3.1-8b-instant"
     llm_temperature: float = 0.0
     llm_max_retries: int = 2
+    # Total attempts (incl. the first) made when Groq answers 429 rate-limited.
+    llm_rate_limit_retries: int = 5
+
+    # ── Research loop ─────────────────────────────────────────────────────
+    # Max ADDITIONAL research rounds before the pipeline terminates. 0 = a
+    # single pass (loop disabled), the free-tier-friendly default — every
+    # extra round re-runs the whole pipeline and burns tokens.
+    research_loop_max_rounds: int = 0
+
+    # ── Token budget (free-tier friendly) ─────────────────────────────────
+    # Max output tokens per LLM generation. Capping outputs keeps a single
+    # pipeline pass inside Groq's 6000 TPM free-tier window.
+    llm_max_tokens: int = 1536
+    # Max chars of text kept per web-evidence item. The search summary is
+    # shared across every source URL, so without a cap the same text gets
+    # duplicated per source and inflates every downstream prompt.
+    evidence_max_chars: int = 300
+    # Max chars of each Tavily snippet kept in formatted search results.
+    search_snippet_max_chars: int = 150
+    # Run the critic review step? Off by default — the critic re-reads the
+    # whole report (~2000+ tokens), the largest non-essential LLM call.
+    # Enable on a higher tier.
+    run_critic: bool = False
 
     # ── Web research ──────────────────────────────────────────────────────
     tavily_max_results: int = 5

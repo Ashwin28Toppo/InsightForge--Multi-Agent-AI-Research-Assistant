@@ -193,6 +193,7 @@ def test_high_confidence_any_round_complete(monkeypatch):
 
 def test_medium_rounds_0_performs_another_round(monkeypatch):
     counts = make_running_graph(monkeypatch, confidence="medium")
+    monkeypatch.setattr("backend.app.agents.confidence.settings.research_loop_max_rounds", 2)
     result = graph_mod.build_research_graph().invoke({"query": "q"})
     assert counts["research"] == 3
     assert result["research_rounds"] == 2
@@ -200,6 +201,7 @@ def test_medium_rounds_0_performs_another_round(monkeypatch):
 
 def test_low_rounds_0_performs_another_round(monkeypatch):
     counts = make_running_graph(monkeypatch, confidence="low")
+    monkeypatch.setattr("backend.app.agents.confidence.settings.research_loop_max_rounds", 2)
     result = graph_mod.build_research_graph().invoke({"query": "q"})
     assert counts["research"] == 3
     assert result["research_rounds"] == 2
@@ -207,6 +209,7 @@ def test_low_rounds_0_performs_another_round(monkeypatch):
 
 def test_medium_rounds_2_finishes_insufficient(monkeypatch):
     counts = make_running_graph(monkeypatch, confidence="medium")
+    monkeypatch.setattr("backend.app.agents.confidence.settings.research_loop_max_rounds", 2)
     result = graph_mod.build_research_graph().invoke({"query": "q", "research_rounds": 2})
     assert counts["research"] == 1
     assert result["research_rounds"] == 2
@@ -214,6 +217,7 @@ def test_medium_rounds_2_finishes_insufficient(monkeypatch):
 
 def test_low_rounds_2_finishes_insufficient(monkeypatch):
     counts = make_running_graph(monkeypatch, confidence="low")
+    monkeypatch.setattr("backend.app.agents.confidence.settings.research_loop_max_rounds", 2)
     result = graph_mod.build_research_graph().invoke({"query": "q", "research_rounds": 2})
     assert counts["research"] == 1
     assert result["research_rounds"] == 2
@@ -221,6 +225,7 @@ def test_low_rounds_2_finishes_insufficient(monkeypatch):
 
 def test_research_rounds_increase_correctly(monkeypatch):
     make_running_graph(monkeypatch, confidence="medium")
+    monkeypatch.setattr("backend.app.agents.confidence.settings.research_loop_max_rounds", 2)
     result = graph_mod.build_research_graph().invoke({"query": "q"})
     # Two loop-backs -> rounds incremented 1 then 2.
     assert result["research_rounds"] == 2
@@ -228,10 +233,31 @@ def test_research_rounds_increase_correctly(monkeypatch):
 
 def test_loop_cannot_run_forever(monkeypatch):
     counts = make_running_graph(monkeypatch, confidence="low")
+    monkeypatch.setattr("backend.app.agents.confidence.settings.research_loop_max_rounds", 2)
     # Completes without RecursionError and is bounded.
     result = graph_mod.build_research_graph().invoke({"query": "q"})
     assert result["research_rounds"] == 2
     assert counts["research"] == 3
+
+
+# ── Single-pass default (loop disabled) ─────────────────────────────────────
+
+
+def test_medium_single_pass_by_default(monkeypatch):
+    monkeypatch.setattr("backend.app.agents.confidence.settings.research_loop_max_rounds", 0)
+    counts = make_running_graph(monkeypatch, confidence="medium")
+    result = graph_mod.build_research_graph().invoke({"query": "q"})
+    assert counts["research"] == 1
+    assert counts["critic"] == 1
+    assert "research_rounds" not in result  # no loop, no increment
+
+
+def test_low_single_pass_by_default(monkeypatch):
+    monkeypatch.setattr("backend.app.agents.confidence.settings.research_loop_max_rounds", 0)
+    counts = make_running_graph(monkeypatch, confidence="low")
+    result = graph_mod.build_research_graph().invoke({"query": "q"})
+    assert counts["research"] == 1
+    assert "research_rounds" not in result
 
 
 def test_increment_rounds_node():

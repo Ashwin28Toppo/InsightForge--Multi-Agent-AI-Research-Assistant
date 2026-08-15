@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from backend.app.core.config import settings
 from backend.app.graph.state import Citation, EvidenceItem, FactCheck
 
 VALID_CONFIDENCE = ("high", "medium", "low")
@@ -40,8 +41,9 @@ VALID_CONFIDENCE = ("high", "medium", "low")
 HIGH_THRESHOLD = 0.75
 MEDIUM_THRESHOLD = 0.50
 
-# Bounded rounds: additional research is attempted while rounds < MAX_ROUNDS.
-MAX_ROUNDS = 2
+# The loop is bounded by ``settings.research_loop_max_rounds`` (0 = single
+# pass, the free-tier-friendly default). ``increment_rounds`` is only
+# reachable while ``research_rounds < max_rounds``.
 
 _W_FACT = 0.55
 _W_EVIDENCE = 0.30
@@ -117,13 +119,20 @@ def calculate_confidence(
     return "low"
 
 
-def route_research(confidence: str, research_rounds: int = 0) -> str:
+def route_research(
+    confidence: str,
+    research_rounds: int = 0,
+    max_rounds: int | None = None,
+) -> str:
     """Decide the next action from confidence and the research round count.
 
     Rules:
-        high                    -> "complete"
-        medium/low, rounds < 2  -> "additional_research"
-        medium/low, rounds >= 2 -> "insufficient"
+        high                              -> "complete"
+        medium/low, rounds < max_rounds   -> "additional_research"
+        medium/low, rounds >= max_rounds  -> "insufficient"
+
+    ``max_rounds`` defaults to ``settings.research_loop_max_rounds``
+    (0 = single pass / loop disabled).
 
     Returns exactly one of: complete | additional_research | insufficient.
 
@@ -142,7 +151,9 @@ def route_research(confidence: str, research_rounds: int = 0) -> str:
 
     if confidence == "high":
         return "complete"
-    if research_rounds < MAX_ROUNDS:
+    if max_rounds is None:
+        max_rounds = settings.research_loop_max_rounds
+    if research_rounds < max_rounds:
         return "additional_research"
     return "insufficient"
 

@@ -1,5 +1,7 @@
 import streamlit as st
 import time
+
+from backend.app.core.config import settings
 from backend.app.main import run_research_pipeline
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -293,9 +295,10 @@ details summary {
 # ── Helper: render a step card ────────────────────────────────────────────────
 def step_card(num: str, title: str, state: str, desc: str = ""):
     status_map = {
-        "waiting": ("WAITING", "status-waiting"),
-        "running": ("● RUNNING", "status-running"),
-        "done":    ("✓ DONE",   "status-done"),
+        "waiting":  ("WAITING", "status-waiting"),
+        "running":  ("● RUNNING", "status-running"),
+        "done":     ("✓ DONE",   "status-done"),
+        "disabled": ("SKIPPED",  "status-waiting"),
     }
     label, cls = status_map.get(state, ("", ""))
     card_cls = {"running": "active", "done": "done"}.get(state, "")
@@ -323,8 +326,8 @@ st.markdown("""
     <div class="hero-eyebrow">Multi-Agent AI System</div>
     <h1>Insight<span>Forge</span></h1>
     <p class="hero-sub">
-        Four specialized AI agents collaborate — searching, scraping, writing,
-        and critiquing — to deliver a polished research report on any topic.
+        Specialized AI agents collaborate — searching, verifying, and
+        writing — to deliver a polished research report on any topic.
     </p>
 </div>
 <div class="divider"></div>
@@ -375,27 +378,28 @@ with col_pipeline:
     def s(step):
         if not r:
             return "waiting"
-        # Map pipeline step names to ResearchState field names
+        # Map pipeline steps to ResearchState fields produced by the graph.
         state_keys = {
             "search": "search_results",
-            "reader": "extracted_information",
+            "claims": "fact_checks",
             "writer": "report",
             "critic": "critic_feedback",
         }
-        steps = ["search", "reader", "writer", "critic"]
+        steps = ["search", "claims", "writer", "critic"]
         if state_keys[step] in r:
             return "done"
-        # which step is running now (first not in r)
         if st.session_state.running:
             for k in steps:
                 if state_keys[k] not in r:
                     return "running" if k == step else "waiting"
         return "waiting"
 
-    step_card("01", "Search Agent",  s("search"), "Gathers recent web information")
-    step_card("02", "Reader Agent",  s("reader"), "Scrapes & extracts deep content")
-    step_card("03", "Writer Chain",  s("writer"), "Drafts the full research report")
-    step_card("04", "Critic Chain",  s("critic"), "Reviews & scores the report")
+    step_card("01", "Search Agent",      s("search"), "Gathers recent web information")
+    step_card("02", "Claims & Verifier", s("claims"), "Extracts & fact-checks claims")
+    step_card("03", "Writer Chain",      s("writer"), "Drafts the full research report")
+    # The critic is skipped by default on the free tier (settings.run_critic).
+    step_card("04", "Critic Chain", "disabled" if not settings.run_critic else s("critic"),
+              "Reviews & scores the report")
 
 
 # ── Run pipeline ──────────────────────────────────────────────────────────────
@@ -415,10 +419,18 @@ if st.session_state.running and not st.session_state.done:
     # lives in backend.app.main.run_research_pipeline).
     status = st.empty()
     step_labels = {
+        "plan": "🧭  Planning research angles…",
         "search": "🔍  Search Agent is working…",
+        "research": "🔍  Search Agent is working…",
         "reader": "📄  Reader Agent is scraping top resources…",
+        "evidence": "📦  Merging web & RAG evidence…",
+        "claim_extraction": "🔖  Extracting checkable claims…",
+        "fact_check": "✅  Fact-checking claims…",
+        "citation": "📚  Building citations…",
+        "confidence": "📊  Scoring confidence…",
         "writer": "✍️  Writer is drafting the report…",
         "critic": "🧐  Critic is reviewing the report…",
+        "increment_rounds": "🔁  Running an additional research round…",
     }
 
     def on_step(step: str):

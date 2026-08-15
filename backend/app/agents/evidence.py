@@ -131,7 +131,8 @@ def merge_evidence(
     """Combine web + RAG evidence into one deterministic, ranked list.
 
     - Preserves source_type and all provenance fields (dicts are not rebuilt).
-    - Assigns a deterministic id to items that lack one.
+    - Assigns a deterministic id to items that lack one, then renumbers the
+      final list to short readable ids (E1, E2, ...).
     - Removes exact duplicates by id (first occurrence wins).
     - Never removes two different chunks just because their text is similar
       (distinct provenance yields distinct ids).
@@ -168,5 +169,11 @@ def merge_evidence(
     ordered = sorted(
         merged.values(),
         key=lambda it: (-_score(it), str(it.get("id", ""))),
-    )
-    return ordered[:limit]
+    )[:limit]
+
+    # Renumber to short, human-readable ids (E1, E2, ...) so downstream
+    # prompts (fact checks, citations, the writer's evidence block) and the
+    # final report show readable references instead of opaque hashes.
+    for position, item in enumerate(ordered, start=1):
+        item["id"] = f"E{position}"
+    return ordered

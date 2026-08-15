@@ -4,6 +4,7 @@ Pure arithmetic — no LLM/API calls.
 """
 import pytest
 
+import backend.app.agents.confidence as confidence
 from backend.app.agents.confidence import (
     calculate_confidence,
     confidence_score,
@@ -213,5 +214,22 @@ def test_negative_research_rounds_raises():
         ("low", 5, "insufficient"),
     ],
 )
-def test_route_research_table(confidence, rounds, expected):
-    assert route_research(confidence, rounds) == expected
+def test_route_research_table_with_loop_enabled(confidence, rounds, expected):
+    # max_rounds=2 preserves the original bounded-loop behavior explicitly
+    # (independent of the settings default).
+    assert route_research(confidence, rounds, max_rounds=2) == expected
+
+
+def test_route_research_single_pass_by_default(monkeypatch):
+    # The free-tier-friendly default: no additional research rounds.
+    monkeypatch.setattr(confidence.settings, "research_loop_max_rounds", 0)
+    assert route_research("high", 0) == "complete"
+    assert route_research("medium", 0) == "insufficient"
+    assert route_research("low", 0) == "insufficient"
+    assert route_research("medium", 5) == "insufficient"
+
+
+def test_route_research_explicit_max_rounds():
+    assert route_research("medium", 0, max_rounds=1) == "additional_research"
+    assert route_research("medium", 1, max_rounds=1) == "insufficient"
+    assert route_research("low", 2, max_rounds=5) == "additional_research"

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 
+from backend.app.core.config import settings
 from backend.app.agents.citation import generate_citations
 from backend.app.agents.claim_extractor import extract_claims
 from backend.app.agents.confidence import calculate_confidence
@@ -46,18 +47,17 @@ def plan_node(state: ResearchState) -> dict:
 # ── 2. Research node ─────────────────────────────────────────────────────────
 
 def _default_web_research(query: str, angles: list[str]) -> tuple[str, list[str]]:
-    """Run the existing search agent and return (summary text, source URLs)."""
-    from backend.app.main import build_search_agent
+    """Run a direct Tavily search (no LLM) and return (text, source URLs).
 
-    agent = build_search_agent()
-    result = agent.invoke({
-        "messages": [("user", f"Find recent, reliable and detailed information about: {query}")]
-    })
-    text = result["messages"][-1].content
-    all_text = "\n".join(
-        m.content for m in result["messages"] if isinstance(m.content, str)
-    )
-    return text, extract_urls(all_text)
+    A plain tool call is far faster and cheaper than the search agent, which
+    needed two LLM round-trips (decide-to-search + summarize). On the free
+    tier every extra LLM call risks a 30-50s rate-limit wait, so dropping the
+    agent here is the single biggest speedup available.
+    """
+    from backend.app.tools.web import web_search
+
+    text = web_search.invoke({"query": query})
+    return text, extract_urls(text)
 
 
 def _to_state_chunk(chunk: VectorRetrievedChunk) -> dict:
@@ -131,6 +131,9 @@ def _web_evidence_from_state(state: ResearchState) -> list[dict]:
     ).strip()
     if not sources or not text:
         return []
+    # The same summary text is shared across every source URL; cap each copy
+    # so it is not duplicated per source and inflates every downstream prompt.
+    text = text[: settings.evidence_max_chars]
     return [
         {
             "source_type": "web",
@@ -210,7 +213,7 @@ def fact_check_node(state: ResearchState, claims=None) -> dict:
         claims = state.get("claims") or []
     if not claims:
         return {"fact_checks": []}
-    checks = fact_check_claims(list(claims), state.get("evidence") or [])
+    checks = fact_check_claims(list(claims), state.get("evidence") or [], batch=True)
     return {"fact_checks": checks}
 
 
@@ -341,7 +344,15 @@ def _extract_critic_score(feedback: str) -> int | None:
 
 
 def critic_node(state: ResearchState) -> dict:
-    """Review the draft report with the existing critic chain."""
+    """Review the draft report with the existing critic chain.
+
+    Skipped (no LLM call) when ``settings.run_critic`` is False — the default
+    on the free tier, where the critic's report re-read (~2000+ tokens) is the
+    largest non-essential cost. Returns an empty update so the graph state is
+    unchanged.
+    """
+    if not settings.run_critic:
+        return {}
     report = state.get("report_draft") or state.get("report") or ""
     feedback = critic_chain.invoke({"report": report})
     return {"critic_feedback": feedback, "critic_score": _extract_critic_score(feedback)}

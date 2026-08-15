@@ -27,10 +27,10 @@ Rules:
 - Claims must be factual statements that can be checked against the evidence.
 - Claims must be concise, specific, and independently verifiable.
 - Avoid questions, instructions, opinions, vague statements, and duplicated claims.
-- Target approximately 3-8 claims, but fewer is fine if the material genuinely contains fewer checkable claims.
+- Target approximately 3-5 claims, but fewer is fine if the material genuinely contains fewer checkable claims.
 
 Respond with a single JSON object of the form:
-{"claims": ["claim one", "claim two"]}"""),
+{{"claims": ["claim one", "claim two"]}}"""),
     ("human", "RESEARCH:\n{research}\n\nEVIDENCE:\n{evidence}"),
 ])
 

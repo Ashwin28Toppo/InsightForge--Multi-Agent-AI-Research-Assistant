@@ -218,9 +218,10 @@ def test_fact_check_node_consumes_state_claims(monkeypatch):
     evidence = [{"id": "E1", "source_type": "web", "text": "t", "title": "T", "score": 0.8}]
     captured = {}
 
-    def fake_check(claims, evidence_):
+    def fake_check(claims, evidence_, batch=False):
         captured["claims"] = claims
         captured["evidence"] = evidence_
+        captured["batch"] = batch
         return [{"claim": "c", "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}]
 
     monkeypatch.setattr(nodes, "fact_check_claims", fake_check)
@@ -230,6 +231,7 @@ def test_fact_check_node_consumes_state_claims(monkeypatch):
 
     assert captured["claims"] == ["state claim"]
     assert captured["evidence"] == evidence
+    assert captured["batch"] is True  # node batches all claims into one call
     assert out["fact_checks"][0]["verdict"] == "supported"
     assert state == snapshot(state)
 
@@ -237,7 +239,7 @@ def test_fact_check_node_consumes_state_claims(monkeypatch):
 def test_fact_check_node_without_state_claims_returns_empty(monkeypatch):
     called = []
 
-    def fake_check(claims, evidence_):
+    def fake_check(claims, evidence_, batch=False):
         called.append(claims)
         return []
 
@@ -256,7 +258,7 @@ def test_fact_check_node_passes_claims_and_evidence(monkeypatch):
     evidence = [{"id": "E1", "source_type": "web", "text": "t", "title": "T", "score": 0.8}]
     captured = {}
 
-    def fake_check(claims, evidence_):
+    def fake_check(claims, evidence_, batch=False):
         captured["claims"] = claims
         captured["evidence"] = evidence_
         return [{"claim": "c", "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}]
@@ -433,6 +435,7 @@ def test_writer_node_empty_evidence_still_invokes_writer(monkeypatch):
 def test_critic_node_returns_feedback_and_score(monkeypatch):
     chain = FakeChain(result="Score: 7/10\n\nStrengths:\n- good")
     monkeypatch.setattr(nodes, "critic_chain", chain)
+    monkeypatch.setattr(nodes.settings, "run_critic", True)
     state = base_state(report_draft="the report")
 
     out = nodes.critic_node(state)
@@ -446,9 +449,22 @@ def test_critic_node_returns_feedback_and_score(monkeypatch):
 def test_critic_node_without_score_in_feedback(monkeypatch):
     chain = FakeChain(result="no score line here")
     monkeypatch.setattr(nodes, "critic_chain", chain)
+    monkeypatch.setattr(nodes.settings, "run_critic", True)
     out = nodes.critic_node(base_state(report_draft="r"))
     assert out["critic_score"] is None
     assert out["critic_feedback"] == "no score line here"
+
+
+def test_critic_node_skipped_when_disabled(monkeypatch):
+    # Free-tier default: the critic is skipped entirely (no LLM call).
+    monkeypatch.setattr(nodes.settings, "run_critic", False)
+    chain = FakeChain(result="Score: 9/10")
+    monkeypatch.setattr(nodes, "critic_chain", chain)
+
+    out = nodes.critic_node(base_state(report_draft="r"))
+
+    assert out == {}
+    assert chain.calls == []  # no LLM call
 
 
 # ── Determinism & shared guarantees ──────────────────────────────────────────

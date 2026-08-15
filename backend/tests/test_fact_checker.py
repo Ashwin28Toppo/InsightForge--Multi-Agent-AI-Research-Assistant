@@ -297,3 +297,86 @@ def test_application_level_output_is_deterministic():
     a = fact_check_claims(["c1", "c2"], EVIDENCE, chain=chain)
     b = fact_check_claims(["c1", "c2"], EVIDENCE, chain=chain)
     assert a == b
+
+
+# ── Batched mode (one LLM call for all claims) ──────────────────────────────
+
+
+class FakeBatchChain:
+    """Stand-in for the batched fact-check chain (inputs use ``claims``)."""
+
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+
+    def invoke(self, inputs):
+        self.calls.append(inputs)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def test_batch_mode_checks_all_claims_in_one_call():
+    chain = FakeBatchChain(result={
+        "results": [
+            {"claim": 0, "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]},
+            {"claim": 1, "verdict": "insufficient", "confidence": 0.2, "evidence_refs": []},
+        ]
+    })
+    result = fact_check_claims(["a", "b"], EVIDENCE, chain=chain, batch=True)
+
+    assert len(chain.calls) == 1  # ONE call for both claims
+    assert set(chain.calls[0].keys()) == {"claims", "evidence"}
+    assert [fc["verdict"] for fc in result] == ["supported", "insufficient"]
+    assert result[0]["claim"] == "a"
+    assert result[1]["claim"] == "b"
+
+
+def test_batch_mode_preserves_input_order_regardless_of_result_order():
+    chain = FakeBatchChain(result={
+        "results": [
+            {"claim": 1, "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]},
+            {"claim": 0, "verdict": "contradicted", "confidence": 0.8, "evidence_refs": ["E2"]},
+        ]
+    })
+    result = fact_check_claims(["first", "second"], EVIDENCE, chain=chain, batch=True)
+
+    assert [fc["claim"] for fc in result] == ["first", "second"]
+    assert result[0]["verdict"] == "contradicted"
+    assert result[1]["verdict"] == "supported"
+
+
+def test_batch_mode_fallback_parses_json():
+    chain = FakeBatchChain(error=RuntimeError("structured output failed"))
+    fallback = FakeBatchChain(result=(
+        '```json\n{"results": [{"claim": 0, "verdict": "supported", '
+        '"confidence": 0.9, "evidence_refs": ["E1"]}]}\n```'
+    ))
+    result = fact_check_claims(["c"], EVIDENCE, chain=chain, fallback_chain=fallback, batch=True)
+
+    assert result[0]["verdict"] == "supported"
+
+
+def test_batch_mode_rejects_missing_claim_results():
+    chain = FakeBatchChain(result={
+        "results": [{"claim": 0, "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}]
+    })
+    fallback = FakeBatchChain(error=RuntimeError("fallback boom"))
+    with pytest.raises(ValueError):
+        fact_check_claims(["a", "b"], EVIDENCE, chain=chain, fallback_chain=fallback, batch=True)
+
+
+def test_batch_mode_rejects_out_of_range_claim_index():
+    chain = FakeBatchChain(result={
+        "results": [{"claim": 5, "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}]
+    })
+    fallback = FakeBatchChain(error=RuntimeError("fallback boom"))
+    with pytest.raises(ValueError):
+        fact_check_claims(["a"], EVIDENCE, chain=chain, fallback_chain=fallback, batch=True)
+
+
+def test_batch_mode_no_evidence_short_circuits_without_llm():
+    chain = FakeBatchChain(error=RuntimeError("chain must not be called"))
+    result = fact_check_claims(["a", "b"], [], chain=chain, batch=True)
+    assert all(fc["verdict"] == "insufficient" for fc in result)

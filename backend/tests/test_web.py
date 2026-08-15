@@ -12,9 +12,9 @@ def test_format_search_results_lists_titles_urls_and_snippets():
     assert "Title: Alpha" in out
     assert "URL: https://alpha.example.com" in out
     assert "Title: Beta" in out
-    # snippet truncated to 300 chars
-    assert "A" * 300 in out
-    assert "A" * 301 not in out
+    # snippet truncated to settings.search_snippet_max_chars (150)
+    assert "A" * 150 in out
+    assert "A" * 151 not in out
 
 
 def test_format_search_results_empty():

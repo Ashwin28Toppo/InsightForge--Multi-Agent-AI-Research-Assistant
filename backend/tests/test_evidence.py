@@ -240,6 +240,16 @@ def test_merge_sorted_by_score_descending():
     assert [it["url"] for it in merged] == ["https://high.com", "https://low.com"]
 
 
+def test_merge_renumbers_ids_readably():
+    web = web_results_to_evidence([
+        web_result(url="https://high.com", content="high", score=0.9),
+        web_result(url="https://low.com", content="low", score=0.2),
+    ])
+    merged = merge_evidence(web, [])
+    assert [it["id"] for it in merged] == ["E1", "E2"]
+    assert all(it["id"].startswith("E") for it in merged)
+
+
 def test_merge_max_items_limit():
     web = web_results_to_evidence([web_result(url=f"https://{i}.com", content=f"c{i}", score=i) for i in range(5)])
     merged = merge_evidence(web, [], max_items=2)

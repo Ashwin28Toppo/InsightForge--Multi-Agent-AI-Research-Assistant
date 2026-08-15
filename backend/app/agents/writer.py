@@ -13,11 +13,21 @@ Topic: {topic}
 Research Gathered:
 {research}
 
+The research above includes an EVIDENCE section, a CLAIMS section, a FACT
+CHECKS section, and a CITATIONS section.
+
+Rules:
+- In Key Findings, cite each source with its numbered citation from the
+  CITATIONS section, e.g. [1], [2]. Never use evidence IDs like [E1] as
+  citations.
+- End with a "Sources" section listing every citation as "[n] Title — URL".
+- Use ONLY facts present in the research. Do not invent sources.
+
 Structure the report as:
 - Introduction
-- Key Findings (minimum 4 well-explained points)
+- Key Findings (minimum 4 well-explained points, each citing sources)
 - Conclusion
-- Sources (list all URLs found in the research)
+- Sources
 
 Be detailed, factual and professional."""),
 ])

@@ -4,9 +4,15 @@ from backend.app.core.config import Settings
 
 def test_defaults_without_env_file():
     s = Settings(_env_file=None)
-    assert s.llm_model == "llama-3.3-70b-versatile"
+    assert s.llm_model == "llama-3.1-8b-instant"
     assert s.llm_temperature == 0.0
     assert s.llm_max_retries == 2
+    assert s.llm_rate_limit_retries == 5
+    assert s.research_loop_max_rounds == 0
+    assert s.llm_max_tokens == 1536
+    assert s.evidence_max_chars == 300
+    assert s.search_snippet_max_chars == 150
+    assert s.run_critic is False
     assert s.tavily_max_results == 5
     assert s.scrape_max_chars == 3000
 

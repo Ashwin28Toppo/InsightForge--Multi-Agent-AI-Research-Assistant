@@ -21,9 +21,28 @@ from backend.app.graph.state import ResearchState
 from backend.app.tools.web import extract_urls, scrape_url, web_search
 
 
+_SEARCH_SYSTEM_PROMPT = (
+    "You are a web researcher. You have one tool, web_search.\n"
+    "Perform exactly 1 search for the user's topic, then reply with:\n"
+    "1) a concise factual summary paragraph, and\n"
+    "2) the source URLs you used, one per line.\n"
+    "Do not call web_search more than once."
+)
+
+
 def build_search_agent():
-    """Build the search agent: an LLM with the Tavily web-search tool."""
-    return create_agent(model=get_llm(), tools=[web_search])
+    """Build the search agent: an LLM with the Tavily web-search tool.
+
+    A concise system prompt keeps the agent from looping into many
+    back-to-back searches. On Groq's free tier every accumulated tool result
+    inflates the request, and a single call can exceed the 6000 TPM budget
+    (HTTP 413 "Request too large").
+    """
+    return create_agent(
+        model=get_llm(),
+        tools=[web_search],
+        system_prompt=_SEARCH_SYSTEM_PROMPT,
+    )
 
 
 def build_reader_agent():
@@ -65,16 +84,21 @@ def run_research_pipeline(
 
     Args:
         query: The research topic.
-        on_step: Accepted for backward compatibility with the previous
-            sequential pipeline; unused because the graph owns orchestration
-            (per-node progress events are a later streaming step).
+        on_step: Optional callback invoked with the name of each graph node
+            as it completes (drives the Streamlit live-status box).
 
     Returns:
         The application-level result (``report``, ``search_results``,
         ``sources``, ``critic_feedback``, etc.).
     """
-    state = research_graph.invoke({"query": query})
-    return _to_application_result(state)
+    final_state: dict = {}
+    for chunk in research_graph.stream({"query": query}, stream_mode="updates"):
+        for node, update in chunk.items():
+            if isinstance(update, dict):
+                final_state.update(update)
+                if on_step is not None:
+                    on_step(node)
+    return _to_application_result(final_state)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ If the verdict is "insufficient", evidence_refs should be an empty list.
 Confidence must be a number between 0.0 and 1.0 representing your confidence in the verdict.
 
 Respond with a single JSON object of the form:
-{"verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}"""),
+{{"verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}}"""),
     ("human", "CLAIM:\n{claim}\n\nEVIDENCE:\n{evidence}"),
 ])
 
@@ -69,6 +69,63 @@ _default_chain = build_fact_check_chain()
 _fallback_chain = build_fact_check_fallback_chain()
 
 
+# ── Batched mode (free-tier friendly: ONE call for all claims) ──────────────
+
+fact_check_batch_prompt = ChatPromptTemplate.from_messages([
+    ("system", """You are a fact checker. Evaluate EACH claim below ONLY against the supplied evidence.
+
+Rules:
+- Do not use outside knowledge or general model knowledge.
+- Use only the supplied evidence. Do not invent evidence.
+- Do not browse the web or retrieve documents.
+
+For each claim determine exactly one of three verdicts:
+- "supported": the supplied evidence provides sufficient information supporting the claim.
+- "contradicted": the supplied evidence provides information that conflicts with the claim.
+- "insufficient": the supplied evidence does not contain enough information to establish support or contradiction.
+
+Return exactly one result per claim, in the same order, using the claim's 0-based index.
+Return only evidence IDs from the EVIDENCE section that actually support or contradict the claim.
+If the verdict is "insufficient", evidence_refs should be an empty list.
+Confidence must be a number between 0.0 and 1.0.
+
+Respond with a single JSON object of the form:
+{{"results": [{{"claim": 0, "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}}]}}"""),
+    ("human", "CLAIMS:\n{claims}\n\nEVIDENCE:\n{evidence}"),
+])
+
+
+class _BatchVerdictItem(BaseModel):
+    """One claim verdict inside the batched result."""
+
+    claim: int
+    verdict: Literal["supported", "contradicted", "insufficient"]
+    confidence: float
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class _BatchVerdictOutput(BaseModel):
+    """Batched structured schema: a list of per-claim verdicts."""
+
+    results: list[_BatchVerdictItem] = Field(default_factory=list)
+
+
+def build_fact_check_batch_chain(llm=None):
+    """Batched primary chain: one call for all claims + evidence."""
+    llm = llm or get_llm()
+    return fact_check_batch_prompt | llm.with_structured_output(_BatchVerdictOutput)
+
+
+def build_fact_check_batch_fallback_chain(llm=None):
+    """Batched fallback chain: plain generation, JSON parsed afterwards."""
+    llm = llm or get_llm()
+    return fact_check_batch_prompt | llm | StrOutputParser()
+
+
+_default_batch_chain = build_fact_check_batch_chain()
+_batch_fallback_chain = build_fact_check_batch_fallback_chain()
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 
 def fact_check_claims(
@@ -76,6 +133,7 @@ def fact_check_claims(
     evidence: list[EvidenceItem] | None = None,
     chain=None,
     fallback_chain=None,
+    batch: bool = False,
 ) -> list[FactCheck]:
     """Fact-check each claim against the supplied evidence.
 
@@ -84,6 +142,8 @@ def fact_check_claims(
             in the same order.
         evidence: :class:`EvidenceItem` dicts to evaluate against.
         chain / fallback_chain: Optional chain overrides (for tests).
+        batch: When True, all claims are checked in a single LLM call
+            (free-tier friendly) instead of one call per claim.
 
     Returns:
         List of :class:`FactCheck` (same length and order as ``claims``).
@@ -113,10 +173,15 @@ def fact_check_claims(
             for c in normalized_claims
         ]
 
-    chain = chain or _default_chain
-    fallback_chain = fallback_chain or _fallback_chain
     valid_ids = {e["id"] for e in usable_evidence}
 
+    if batch:
+        return _check_claims_batched(
+            normalized_claims, usable_evidence, chain, fallback_chain, valid_ids
+        )
+
+    chain = chain or _default_chain
+    fallback_chain = fallback_chain or _fallback_chain
     return [
         _check_single_claim(c, usable_evidence, chain, fallback_chain, valid_ids)
         for c in normalized_claims
@@ -144,6 +209,73 @@ def _check_single_claim(
             raise ValueError(
                 f"fact checking failed for claim {claim!r}: {e}"
             ) from e
+
+
+def _format_claims(claims: list[str]) -> str:
+    """Number the claims so the model can reference them by index."""
+    return "\n".join(f"{i}. {c}" for i, c in enumerate(claims))
+
+
+def _check_claims_batched(
+    claims: list[str],
+    evidence: list[EvidenceItem],
+    chain,
+    fallback_chain,
+    valid_ids: set[str],
+) -> list[FactCheck]:
+    """Check all claims in ONE LLM call (free-tier friendly)."""
+    context = _format_evidence_context(evidence)
+    claims_text = _format_claims(claims)
+    chain = chain or _default_batch_chain
+    fallback_chain = fallback_chain or _batch_fallback_chain
+    try:
+        result = chain.invoke({"claims": claims_text, "evidence": context})
+        return _parse_batch_verdicts(claims, result, valid_ids)
+    except Exception:
+        try:
+            raw = fallback_chain.invoke({"claims": claims_text, "evidence": context})
+            return _parse_batch_verdicts(claims, raw, valid_ids)
+        except Exception as e:
+            raise ValueError(f"fact checking failed for claims: {e}") from e
+
+
+def _parse_batch_verdicts(
+    claims: list[str], result, valid_ids: set[str]
+) -> list[FactCheck]:
+    """Normalize a batched LLM response into ordered, validated FactChecks."""
+    if hasattr(result, "model_dump"):
+        result = result.model_dump()
+    elif isinstance(result, str):
+        result = json.loads(_extract_json(result))
+    if not isinstance(result, dict) or not isinstance(result.get("results"), list):
+        raise ValueError(
+            "batched fact checker did not return a results list, "
+            f"got {type(result).__name__}"
+        )
+
+    by_index: dict[int, FactCheck] = {}
+    for item in result["results"]:
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"batched fact checker returned a non-object entry: {item!r}"
+            )
+        try:
+            idx = int(item.get("claim"))
+        except (TypeError, ValueError):
+            raise ValueError(f"batch result missing claim index: {item!r}")
+        if idx < 0 or idx >= len(claims):
+            raise ValueError(f"batch result claim index out of range: {idx}")
+        by_index[idx] = _validate_fact_check(
+            claims[idx],
+            item.get("verdict"),
+            item.get("confidence"),
+            item.get("evidence_refs"),
+            valid_ids,
+        )
+
+    if len(by_index) != len(claims):
+        raise ValueError(f"batch result covers {len(by_index)}/{len(claims)} claims")
+    return [by_index[i] for i in range(len(claims))]
 
 
 # ── Evidence context formatting ──────────────────────────────────────────────

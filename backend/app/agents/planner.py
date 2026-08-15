@@ -27,7 +27,7 @@ Decide whether the local knowledge base (the user's uploaded documents) could be
 - Set "use_rag" to false for general, current, or web-focused queries where local documents are unlikely to help.
 
 Respond with a single JSON object of the form:
-{"research_angles": ["angle one", "angle two"], "use_rag": true}"""),
+{{"research_angles": ["angle one", "angle two"], "use_rag": true}}"""),
     ("human", "Research query:\n{query}"),
 ])
 

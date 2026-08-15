@@ -47,7 +47,8 @@ def format_search_results(results: list[dict]) -> str:
     out = []
     for r in results:
         out.append(
-            f"Title: {r['title']}\nURL: {r['url']}\nSnippet: {r['content'][:300]}\n"
+            f"Title: {r['title']}\nURL: {r['url']}\n"
+            f"Snippet: {r['content'][: settings.search_snippet_max_chars]}\n"
         )
     return "\n---\n".join(out)
 
