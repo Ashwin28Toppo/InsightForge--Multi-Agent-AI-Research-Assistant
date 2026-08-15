@@ -253,9 +253,76 @@ def _evidence_to_research_text(evidence) -> str:
     return "\n\n".join(blocks)
 
 
+def _format_claims(claims) -> str:
+    lines = []
+    for claim in claims or []:
+        if isinstance(claim, str) and claim.strip():
+            lines.append(f"- {claim.strip()}")
+    return "\n".join(lines)
+
+
+def _format_fact_checks(fact_checks) -> str:
+    lines = []
+    for fc in fact_checks or []:
+        if not isinstance(fc, dict):
+            continue
+        lines.append(
+            f"- claim: {fc.get('claim', '')} | verdict: {fc.get('verdict', '')} "
+            f"| confidence: {fc.get('confidence', '')} | evidence: {fc.get('evidence_refs', [])}"
+        )
+    return "\n".join(lines)
+
+
+def _format_citations(citations) -> str:
+    lines = []
+    for c in citations or []:
+        if not isinstance(c, dict):
+            continue
+        title = c.get("title", "")
+        ref = c.get("url") or c.get("document_id") or title
+        page = c.get("page")
+        suffix = f" (page {page})" if page is not None else ""
+        lines.append(
+            f"[{c.get('index', '?')}] ({c.get('source_type', '')}) {title} — {ref}{suffix}"
+        )
+    return "\n".join(lines)
+
+
+def _build_writer_research(state: ResearchState) -> str:
+    """Assemble the writer's ``research`` payload from the verified state.
+
+    Keeps the evidence section and appends the verification metadata (claims,
+    fact checks, citations, confidence) so the writer can produce a grounded,
+    citation-aware report — without changing the writer chain contract.
+    """
+    sections: list[str] = []
+
+    evidence_text = _evidence_to_research_text(state.get("evidence") or [])
+    if evidence_text:
+        sections.append(f"EVIDENCE:\n{evidence_text}")
+
+    claims_text = _format_claims(state.get("claims"))
+    if claims_text:
+        sections.append(f"CLAIMS:\n{claims_text}")
+
+    fact_checks_text = _format_fact_checks(state.get("fact_checks"))
+    if fact_checks_text:
+        sections.append(f"FACT CHECKS:\n{fact_checks_text}")
+
+    citations_text = _format_citations(state.get("citations"))
+    if citations_text:
+        sections.append(f"CITATIONS:\n{citations_text}")
+
+    confidence = state.get("confidence")
+    if confidence:
+        sections.append(f"CONFIDENCE: {confidence}")
+
+    return "\n\n".join(sections)
+
+
 def writer_node(state: ResearchState) -> dict:
-    """Draft the report from the assembled evidence (existing writer chain)."""
-    research = _evidence_to_research_text(state.get("evidence") or [])
+    """Draft the report from the verified research state (existing chain)."""
+    research = _build_writer_research(state)
     report = writer_chain.invoke({"topic": state["query"], "research": research})
     return {"report_draft": report}
 

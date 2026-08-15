@@ -302,6 +302,18 @@ def test_citation_node_passes_evidence_and_fact_checks(monkeypatch):
     assert state == snapshot(state)
 
 
+def test_citation_node_empty_evidence_returns_empty():
+    out = nodes.citation_node(base_state())
+    assert out == {"citations": []}
+
+
+def test_citation_node_malformed_evidence_does_not_crash():
+    state = base_state(evidence=["not a dict", {"source_type": "web", "text": "no id"}])
+    out = nodes.citation_node(state)
+    assert out == {"citations": []}
+    assert state == snapshot(state)
+
+
 # ── confidence_node ──────────────────────────────────────────────────────────
 
 def test_confidence_node_calls_calculate_confidence(monkeypatch):
@@ -339,6 +351,55 @@ def test_confidence_node_does_not_execute_routing(monkeypatch):
 
     out = nodes.confidence_node(base_state(evidence=[{"id": "E1", "score": 0.1}]))
     assert out == {"confidence": "low"}  # no routing decision leaked
+
+
+def test_confidence_node_verdicts_affect_confidence():
+    evidence = [{"id": "E1", "source_type": "web", "text": "t", "title": "T", "url": "https://a.com", "score": 0.9}]
+    citations = [{"index": 1, "source_type": "web", "title": "T", "url": "https://a.com"}]
+    supported = base_state(
+        evidence=evidence,
+        fact_checks=[{"claim": "c", "verdict": "supported", "confidence": 0.95, "evidence_refs": ["E1"]}],
+        citations=citations,
+    )
+    contradicted = base_state(
+        evidence=evidence,
+        fact_checks=[{"claim": "c", "verdict": "contradicted", "confidence": 0.95, "evidence_refs": ["E1"]}],
+        citations=citations,
+    )
+    assert nodes.confidence_node(supported)["confidence"] == "high"
+    assert nodes.confidence_node(contradicted)["confidence"] == "low"
+
+
+def test_confidence_node_deterministic():
+    state = base_state(
+        evidence=[{"id": "E1", "score": 0.8}],
+        fact_checks=[{"claim": "c", "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}],
+        citations=[{"index": 1, "source_type": "web", "title": "T"}],
+    )
+    assert nodes.confidence_node(state) == nodes.confidence_node(snapshot(state))
+
+
+def test_writer_node_receives_verification_metadata(monkeypatch):
+    chain = FakeChain(result="report")
+    monkeypatch.setattr(nodes, "writer_chain", chain)
+    state = base_state(
+        evidence=[{"id": "E1", "source_type": "web", "title": "Alpha", "text": "evidence body", "url": "https://a.com", "score": 0.9}],
+        claims=["claim one"],
+        fact_checks=[{"claim": "claim one", "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}],
+        citations=[{"index": 1, "source_type": "web", "title": "Alpha", "url": "https://a.com", "document_id": None, "page": None, "chunk_index": None}],
+        confidence="high",
+    )
+
+    out = nodes.writer_node(state)
+
+    assert out == {"report_draft": "report"}
+    research = chain.calls[0]["research"]
+    assert "evidence body" in research
+    assert "claim one" in research
+    assert "supported" in research
+    assert "[1]" in research
+    assert "CONFIDENCE: high" in research
+    assert state == snapshot(state)  # not mutatednodes.confidence_node(snapshot(state))
 
 
 # ── writer_node ──────────────────────────────────────────────────────────────

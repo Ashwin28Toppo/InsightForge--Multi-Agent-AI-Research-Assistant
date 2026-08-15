@@ -344,3 +344,74 @@ def test_node_errors_propagate_normally(monkeypatch):
     monkeypatch.setattr(nodes, "evidence_node", bad_evidence)
     with pytest.raises(RuntimeError, match="boom in evidence"):
         graph_mod.build_research_graph().invoke({"query": "q"})
+
+
+# ── Step 5: citation/confidence/writer/critic integration ───────────────────
+
+def test_full_pipeline_state_progression(monkeypatch):
+    updates = {
+        "plan": {"research_plan": {"research_angles": ["a"], "use_rag": False}},
+        "research": {"search_results": "search text", "sources": ["https://a.com"]},
+        "evidence": {"evidence": [{"id": "E1", "source_type": "web", "text": "t", "title": "T", "url": "https://a.com", "score": 0.9}]},
+        "claim_extraction": {"claims": ["claim one"]},
+        "fact_check": {"fact_checks": [{"claim": "claim one", "verdict": "supported", "confidence": 0.95, "evidence_refs": ["E1"]}]},
+        "citation": {"citations": [{"index": 1, "source_type": "web", "title": "T", "url": "https://a.com", "document_id": None, "page": None, "chunk_index": None}]},
+        "confidence": {"confidence": "high"},
+        "writer": {"report_draft": "draft report"},
+        "critic": {"critic_feedback": "Score: 8/10", "critic_score": 8},
+    }
+    for name in NODE_NAMES:
+        monkeypatch.setattr(nodes, f"{name}_node", make_fake(name, updates[name]))
+
+    result = graph_mod.build_research_graph().invoke({"query": "q"})
+
+    assert result["query"] == "q"
+    assert result["research_plan"]["use_rag"] is False
+    assert result["evidence"][0]["id"] == "E1"
+    assert result["claims"] == ["claim one"]
+    assert result["fact_checks"][0]["verdict"] == "supported"
+    assert result["citations"][0]["index"] == 1
+    assert result["confidence"] == "high"
+    assert result["report_draft"] == "draft report"
+    assert result["critic_feedback"] == "Score: 8/10"
+    assert result["critic_score"] == 8
+
+
+def test_citation_before_confidence_before_writer_before_critic(monkeypatch):
+    executed = []
+
+    def recorder(name):
+        def fake(state):
+            executed.append(name)
+            return {"confidence": "high"} if name == "confidence" else {}
+
+        return fake
+
+    for name in NODE_NAMES:
+        monkeypatch.setattr(nodes, f"{name}_node", recorder(name))
+
+    graph_mod.build_research_graph().invoke({"query": "q"})
+
+    order = {name: i for i, name in enumerate(executed)}
+    assert order["citation"] < order["confidence"] < order["writer"] < order["critic"]
+
+
+def test_empty_claims_still_reaches_confidence(monkeypatch):
+    # Real claim_extraction (returns []) + real fact_check (empty) + fakes elsewhere.
+    monkeypatch.setattr(nodes, "extract_claims", lambda research, evidence: [])
+    updates = {
+        "evidence": {"evidence": [{"id": "E1", "source_type": "web", "text": "t", "title": "T", "score": 0.8}]},
+        "citation": {"citations": [{"index": 1, "source_type": "web", "title": "T", "url": "https://a.com"}]},
+        "confidence": {"confidence": "medium"},
+    }
+    for name in NODE_NAMES:
+        if name in ("claim_extraction", "fact_check"):
+            continue  # real nodes: empty claims -> empty fact checks
+        update = updates.get(name, {})
+        monkeypatch.setattr(nodes, f"{name}_node", make_fake(name, update))
+
+    result = graph_mod.build_research_graph().invoke({"query": "q"})
+
+    assert result.get("claims") == []
+    assert result.get("fact_checks") == []
+    assert result["confidence"] == "medium"
