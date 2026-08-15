@@ -1,34 +1,25 @@
-"""Compiled LangGraph for the linear research workflow (Phase 2C Step 2).
+"""Compiled LangGraph for the research workflow (Phase 2C Steps 2-3).
 
-Topology (linear pass only, no conditional routing / loops yet):
+Topology:
 
     START
       ↓
-    plan
-      ↓
-    research
-      ↓
-    evidence
-      ↓
-    fact_check
-      ↓
-    citation
-      ↓
-    confidence
-      ↓
-    writer
-      ↓
-    critic
-      ↓
-    END
+    plan → research → evidence → fact_check → citation → confidence
+      → writer → critic → [conditional router]
+        ├── complete             → END
+        ├── insufficient         → END
+        └── additional_research  → increment_rounds → research (bounded loop)
 
-``route_research`` integration (confidence-based routing) and the research
-retry loop arrive in a later step.
+The router is a thin adapter over the existing ``route_research()``; the loop
+is bounded because ``route_research`` terminates once ``research_rounds >= 2``
+for non-high confidence. This module is orchestration only — no business logic
+lives here.
 """
 from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
+from backend.app.agents.confidence import route_research
 from backend.app.graph import nodes
 from backend.app.graph.state import ResearchState
 
@@ -45,6 +36,19 @@ def _fact_check_graph_node(state):
     return nodes.fact_check_node(state)
 
 
+def _route_after_critic(state) -> str:
+    """Thin adapter: delegate the post-research routing decision."""
+    return route_research(
+        confidence=state.get("confidence"),
+        research_rounds=state.get("research_rounds") or 0,
+    )
+
+
+def _increment_rounds_node(state) -> dict:
+    """Increment the research round counter before the next cycle."""
+    return {"research_rounds": (state.get("research_rounds") or 0) + 1}
+
+
 def build_research_graph():
     """Build and compile the linear research StateGraph."""
     graph = StateGraph(ResearchState)
@@ -57,6 +61,7 @@ def build_research_graph():
     graph.add_node("confidence", nodes.confidence_node)
     graph.add_node("writer", nodes.writer_node)
     graph.add_node("critic", nodes.critic_node)
+    graph.add_node("increment_rounds", _increment_rounds_node)
 
     graph.add_edge(START, "plan")
     graph.add_edge("plan", "research")
@@ -66,7 +71,18 @@ def build_research_graph():
     graph.add_edge("citation", "confidence")
     graph.add_edge("confidence", "writer")
     graph.add_edge("writer", "critic")
-    graph.add_edge("critic", END)
+
+    # Conditional routing after the critic (existing route_research semantics).
+    graph.add_conditional_edges(
+        "critic",
+        _route_after_critic,
+        {
+            "complete": END,
+            "insufficient": END,
+            "additional_research": "increment_rounds",
+        },
+    )
+    graph.add_edge("increment_rounds", "research")
 
     return graph.compile()
 

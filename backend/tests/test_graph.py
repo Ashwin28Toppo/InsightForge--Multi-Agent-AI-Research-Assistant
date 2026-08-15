@@ -1,8 +1,8 @@
-"""Unit tests for the linear research StateGraph (Phase 2C Step 2).
+"""Unit tests for the research StateGraph (Phase 2C Steps 2-3).
 
-All tests are offline: graph execution uses fake node functions patched into
-``backend.app.graph.nodes``, so no LLM/Tavily/Qdrant calls are made. The real
-graph is only built (never executed) for topology inspection.
+Offline: graph execution uses fake node functions patched into
+``backend.app.graph.nodes``; the real graph is only built (never executed with
+real dependencies). No LLM/Tavily/Qdrant/API calls.
 """
 import copy
 
@@ -12,17 +12,12 @@ import backend.app.graph.graph as graph_mod
 import backend.app.graph.nodes as nodes
 
 NODE_NAMES = [
-    "plan",
-    "research",
-    "evidence",
-    "fact_check",
-    "citation",
-    "confidence",
-    "writer",
-    "critic",
+    "plan", "research", "evidence", "fact_check",
+    "citation", "confidence", "writer", "critic",
 ]
 
-LINEAR_EDGES = [
+# Conditional edges appear in get_graph().edges as one edge per distinct target.
+EXPECTED_EDGES = [
     ("__start__", "plan"),
     ("plan", "research"),
     ("research", "evidence"),
@@ -31,7 +26,9 @@ LINEAR_EDGES = [
     ("citation", "confidence"),
     ("confidence", "writer"),
     ("writer", "critic"),
-    ("critic", "__end__"),
+    ("critic", "__end__"),               # conditional: complete / insufficient
+    ("critic", "increment_rounds"),      # conditional: additional_research
+    ("increment_rounds", "research"),    # loop back
 ]
 
 
@@ -47,43 +44,25 @@ def make_fake(name, update):
     return fake
 
 
-def patch_all_nodes(monkeypatch, updates=None):
-    """Replace every node with a fake returning its (default) update."""
-    executed = []
-    defaults = {
-        "plan": {"research_plan": {"research_angles": ["a"], "use_rag": False}},
-        "research": {"search_results": "text", "sources": ["https://a.com"]},
-        "evidence": [{"id": "E1", "source_type": "web", "text": "t", "title": "T", "score": 0.8}],
-        "fact_check": [{"claim": "c", "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}],
-        "citation": [{"index": 1, "source_type": "web", "title": "T", "url": "https://a.com",
-                      "document_id": None, "page": None, "chunk_index": None}],
-        "confidence": "high",
-        "writer": "draft",
-        "critic": ("Score: 8/10", 8),
-    }
-    updates = updates or {}
+def make_running_graph(monkeypatch, confidence="medium"):
+    """Patch business nodes as recorders; confidence node returns the label."""
+    counts = {name: 0 for name in NODE_NAMES}
 
-    def fake_for(name):
-        update = updates.get(name, defaults[name])
-        if name == "evidence":
-            result = {"evidence": update}
-        elif name == "fact_check":
-            result = {"fact_checks": update}
-        elif name == "citation":
-            result = {"citations": update}
-        elif name == "confidence":
-            result = {"confidence": update}
-        elif name == "writer":
-            result = {"report_draft": update}
-        elif name == "critic":
-            result = {"critic_feedback": update[0], "critic_score": update[1]}
-        else:  # plan, research
-            result = update
-        return make_fake(name, result)
+    def recorder(name, result):
+        def fake(state):
+            counts[name] += 1
+            return result
+
+        return fake
 
     for name in NODE_NAMES:
-        monkeypatch.setattr(nodes, f"{name}_node", fake_for(name))
-    return executed
+        if name == "confidence":
+            monkeypatch.setattr(
+                nodes, "confidence_node", recorder("confidence", {"confidence": confidence})
+            )
+        else:
+            monkeypatch.setattr(nodes, f"{name}_node", recorder(name, {}))
+    return counts
 
 
 # ── Build & topology ─────────────────────────────────────────────────────────
@@ -95,30 +74,50 @@ def test_graph_builds_successfully():
 
 
 def test_all_expected_nodes_exist():
-    compiled = graph_mod.build_research_graph()
-    node_names = set(compiled.get_graph().nodes.keys())
+    node_names = set(graph_mod.build_research_graph().get_graph().nodes.keys())
     for name in NODE_NAMES:
         assert name in node_names
+    assert "increment_rounds" in node_names
 
 
-@pytest.mark.parametrize("source,target", LINEAR_EDGES)
+@pytest.mark.parametrize("source,target", EXPECTED_EDGES)
 def test_expected_edge_exists(source, target):
-    edges = edge_pairs(graph_mod.build_research_graph())
-    assert (source, target) in edges
+    assert (source, target) in edge_pairs(graph_mod.build_research_graph())
 
 
 def test_start_connects_to_plan():
     assert ("__start__", "plan") in edge_pairs(graph_mod.build_research_graph())
 
 
-def test_critic_connects_to_end():
+def test_linear_chain_edges_preserved():
+    edges = edge_pairs(graph_mod.build_research_graph())
+    chain = [
+        ("__start__", "plan"), ("plan", "research"), ("research", "evidence"),
+        ("evidence", "fact_check"), ("fact_check", "citation"),
+        ("citation", "confidence"), ("confidence", "writer"), ("writer", "critic"),
+    ]
+    for source, target in chain:
+        assert (source, target) in edges
+
+
+def test_critic_has_conditional_routing():
+    edges = edge_pairs(graph_mod.build_research_graph())
+    critic_targets = {t for s, t in edges if s == "critic"}
+    assert critic_targets == {"__end__", "increment_rounds"}
+
+
+def test_complete_and_insufficient_route_to_end():
     assert ("critic", "__end__") in edge_pairs(graph_mod.build_research_graph())
 
 
-def test_graph_is_linear_for_this_step():
+def test_additional_research_routes_back_to_research():
     edges = edge_pairs(graph_mod.build_research_graph())
-    # Exactly the linear chain — no extra edges, no branches.
-    assert sorted(edges) == sorted(LINEAR_EDGES)
+    assert ("critic", "increment_rounds") in edges
+    assert ("increment_rounds", "research") in edges
+
+
+def test_topology_matches_bounded_loop():
+    assert sorted(edge_pairs(graph_mod.build_research_graph())) == sorted(EXPECTED_EDGES)
 
 
 def test_compilation_is_deterministic():
@@ -133,17 +132,115 @@ def test_module_level_graph_exists():
     assert hasattr(graph_mod.research_graph, "invoke")
 
 
-# ── Execution (fake nodes, no network) ───────────────────────────────────────
+# ── Routing behavior (fake nodes) ────────────────────────────────────────────
 
-def test_execution_order_is_correct(monkeypatch):
+def test_route_research_is_invoked_by_router(monkeypatch):
+    calls = []
+
+    def fake_route(confidence, research_rounds):
+        calls.append((confidence, research_rounds))
+        return "complete"
+
+    monkeypatch.setattr(graph_mod, "route_research", fake_route)
+    make_running_graph(monkeypatch, confidence="high")
+    graph_mod.build_research_graph().invoke({"query": "q"})
+    assert calls == [("high", 0)]
+
+
+def test_route_after_critic_delegates(monkeypatch):
+    calls = []
+
+    def fake_route(confidence, research_rounds):
+        calls.append((confidence, research_rounds))
+        return "additional_research"
+
+    monkeypatch.setattr(graph_mod, "route_research", fake_route)
+    assert graph_mod._route_after_critic(
+        {"confidence": "medium", "research_rounds": 1}
+    ) == "additional_research"
+    assert calls == [("medium", 1)]
+
+
+def test_high_confidence_finishes_immediately(monkeypatch):
+    counts = make_running_graph(monkeypatch, confidence="high")
+    result = graph_mod.build_research_graph().invoke({"query": "q"})
+    assert counts["research"] == 1
+    assert counts["critic"] == 1
+    assert result["confidence"] == "high"
+    assert "research_rounds" not in result  # no loop, no increment
+
+
+def test_high_confidence_any_round_complete(monkeypatch):
+    counts = make_running_graph(monkeypatch, confidence="high")
+    result = graph_mod.build_research_graph().invoke({"query": "q", "research_rounds": 5})
+    assert counts["research"] == 1
+    assert result["research_rounds"] == 5
+
+
+def test_medium_rounds_0_performs_another_round(monkeypatch):
+    counts = make_running_graph(monkeypatch, confidence="medium")
+    result = graph_mod.build_research_graph().invoke({"query": "q"})
+    assert counts["research"] == 3
+    assert result["research_rounds"] == 2
+
+
+def test_low_rounds_0_performs_another_round(monkeypatch):
+    counts = make_running_graph(monkeypatch, confidence="low")
+    result = graph_mod.build_research_graph().invoke({"query": "q"})
+    assert counts["research"] == 3
+    assert result["research_rounds"] == 2
+
+
+def test_medium_rounds_2_finishes_insufficient(monkeypatch):
+    counts = make_running_graph(monkeypatch, confidence="medium")
+    result = graph_mod.build_research_graph().invoke({"query": "q", "research_rounds": 2})
+    assert counts["research"] == 1
+    assert result["research_rounds"] == 2
+
+
+def test_low_rounds_2_finishes_insufficient(monkeypatch):
+    counts = make_running_graph(monkeypatch, confidence="low")
+    result = graph_mod.build_research_graph().invoke({"query": "q", "research_rounds": 2})
+    assert counts["research"] == 1
+    assert result["research_rounds"] == 2
+
+
+def test_research_rounds_increase_correctly(monkeypatch):
+    make_running_graph(monkeypatch, confidence="medium")
+    result = graph_mod.build_research_graph().invoke({"query": "q"})
+    # Two loop-backs -> rounds incremented 1 then 2.
+    assert result["research_rounds"] == 2
+
+
+def test_loop_cannot_run_forever(monkeypatch):
+    counts = make_running_graph(monkeypatch, confidence="low")
+    # Completes without RecursionError and is bounded.
+    result = graph_mod.build_research_graph().invoke({"query": "q"})
+    assert result["research_rounds"] == 2
+    assert counts["research"] == 3
+
+
+def test_increment_rounds_node():
+    state = {"research_rounds": 2}
+    assert graph_mod._increment_rounds_node(state) == {"research_rounds": 3}
+    assert state == {"research_rounds": 2}  # input not mutated
+    assert graph_mod._increment_rounds_node({}) == {"research_rounds": 1}
+
+
+# ── State flow & safety ──────────────────────────────────────────────────────
+
+def test_execution_order_single_pass(monkeypatch):
     executed = []
-    for name in NODE_NAMES:
-        def fake(state, _name=name):
-            executed.append(_name)
-            return {}
 
-        fake.__name__ = name
-        monkeypatch.setattr(nodes, f"{name}_node", fake)
+    def recorder(name):
+        def fake(state):
+            executed.append(name)
+            return {"confidence": "high"} if name == "confidence" else {}
+
+        return fake
+
+    for name in NODE_NAMES:
+        monkeypatch.setattr(nodes, f"{name}_node", recorder(name))
 
     graph_mod.build_research_graph().invoke({"query": "q"})
     assert executed == NODE_NAMES
@@ -151,18 +248,32 @@ def test_execution_order_is_correct(monkeypatch):
 
 def test_invocation_passes_state_and_preserves_input(monkeypatch):
     for name in NODE_NAMES:
-        monkeypatch.setattr(nodes, f"{name}_node", make_fake(name, {}))
+        update = {"confidence": "high"} if name == "confidence" else {}
+        monkeypatch.setattr(nodes, f"{name}_node", make_fake(name, update))
 
     initial = {"query": "What are the latest developments in AI agents?"}
     before = copy.deepcopy(initial)
     result = graph_mod.build_research_graph().invoke(initial)
 
-    assert result["query"] == "What are the latest developments in AI agents?"
+    assert result["query"] == initial["query"]
     assert initial == before  # input not unexpectedly mutated
 
 
 def test_node_outputs_appear_in_final_state(monkeypatch):
-    patch_all_nodes(monkeypatch)
+    updates = {
+        "plan": {"research_plan": {"research_angles": ["a"], "use_rag": False}},
+        "research": {"search_results": "text", "sources": ["https://a.com"]},
+        "evidence": {"evidence": [{"id": "E1", "source_type": "web", "text": "t", "title": "T", "score": 0.8}]},
+        "fact_check": {"fact_checks": [{"claim": "c", "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}]},
+        "citation": {"citations": [{"index": 1, "source_type": "web", "title": "T", "url": "https://a.com",
+                                    "document_id": None, "page": None, "chunk_index": None}]},
+        "confidence": {"confidence": "high"},
+        "writer": {"report_draft": "draft"},
+        "critic": {"critic_feedback": "Score: 8/10", "critic_score": 8},
+    }
+    for name in NODE_NAMES:
+        monkeypatch.setattr(nodes, f"{name}_node", make_fake(name, updates[name]))
+
     result = graph_mod.build_research_graph().invoke({"query": "q"})
 
     assert result["research_plan"]["use_rag"] is False
@@ -178,25 +289,18 @@ def test_node_outputs_appear_in_final_state(monkeypatch):
 
 
 def test_minimal_query_executes_with_fake_nodes(monkeypatch):
-    patch_all_nodes(monkeypatch)
+    for name in NODE_NAMES:
+        update = {"confidence": "high"} if name == "confidence" else {}
+        monkeypatch.setattr(nodes, f"{name}_node", make_fake(name, update))
     result = graph_mod.build_research_graph().invoke({"query": "q"})
     assert result["query"] == "q"
-    assert "report_draft" in result
-
-
-def test_route_research_is_not_used(monkeypatch):
-    def boom(*args, **kwargs):
-        raise AssertionError("route_research must not be part of this graph")
-
-    monkeypatch.setattr("backend.app.agents.confidence.route_research", boom)
-    patch_all_nodes(monkeypatch)
-    # No exception: routing is never executed.
-    graph_mod.build_research_graph().invoke({"query": "q"})
+    assert result["confidence"] == "high"
 
 
 def test_node_errors_propagate_normally(monkeypatch):
     for name in NODE_NAMES:
-        monkeypatch.setattr(nodes, f"{name}_node", make_fake(name, {}))
+        update = {"confidence": "high"} if name == "confidence" else {}
+        monkeypatch.setattr(nodes, f"{name}_node", make_fake(name, update))
 
     def bad_evidence(state):
         raise RuntimeError("boom in evidence")
