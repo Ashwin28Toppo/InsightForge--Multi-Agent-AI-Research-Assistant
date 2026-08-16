@@ -9,9 +9,12 @@ __pycache__
 .gitignore
 .env
 .env.*
+deploy/.env.production
+deploy/.env.prod.*
 !*.md
 frontend
 data
 qdrant_storage
 tests
 *.egg-info
+backup

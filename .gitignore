@@ -9,6 +9,10 @@ venv/
 # Environment Variables
 .env
 
+# Production secrets (deployment)
+deploy/.env.production
+deploy/.env.prod.*
+
 # RAG / local storage
 qdrant_storage/
 data/

@@ -46,8 +46,10 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Runtime secrets file. Defaults to the repo `.env`; production deploys
+    # point this at a gitignored production env file (see deploy/).
     env_file:
-      - .env
+      - ${BACKEND_ENV_FILE:-.env}
     environment:
       # Qdrant runs as a service on the compose network (remote mode); the
       # Step 10 vector-store implementation already supports QDRANT_URL.
