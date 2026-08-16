@@ -15,14 +15,16 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 from typing import AsyncIterator
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend.app.core.config import settings
 from backend.app.main import arun_research_pipeline_streaming
@@ -47,11 +49,103 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     safe, structured ``{"detail": "Internal server error"}`` response. More
     specific handlers (e.g. ``HTTPException`` for 404, Pydantic validation for
     422) keep taking precedence over this one.
+
+    This handler runs at the outermost ``ServerErrorMiddleware`` level (which
+    owns the ``Exception``/500 handler), so it attaches the request-scoped
+    ``X-Request-ID`` itself — the observability middleware never sees this
+    response.
     """
     logger.exception(
         "unhandled exception on %s %s", request.method, request.url.path
     )
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    response = JSONResponse(
+        status_code=500, content={"detail": "Internal server error"}
+    )
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        response.headers[_REQUEST_ID_HEADER] = request_id
+    return response
+
+
+# ── Request ID / observability (Phase 2D Step 9) ─────────────────────────────
+# Every response carries an ``X-Request-ID``: the client-supplied value when it
+# is safe, otherwise a fresh UUID. The ID is request-scoped (kept on
+# ``request.state`` — i.e. in the per-request ASGI scope — never a global), so
+# concurrent requests, background workers, asyncio and SSE are unaffected.
+
+_REQUEST_ID_HEADER = "X-Request-ID"
+_REQUEST_ID_MAX_LENGTH = 128
+
+
+def _is_valid_request_id(value: str) -> bool:
+    """A safe request ID is 1-128 characters with no control characters.
+
+    Rejecting control characters (including ``\r`` and ``\n``) prevents
+    header/log injection while keeping the API usable — an invalid incoming
+    value is simply replaced, never rejected with a 400.
+    """
+    if not 1 <= len(value) <= _REQUEST_ID_MAX_LENGTH:
+        return False
+    return not any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+
+
+def _resolve_request_id(request: Request) -> str:
+    """Return the validated incoming ``X-Request-ID``, or a fresh UUID."""
+    incoming = request.headers.get(_REQUEST_ID_HEADER)
+    if incoming is not None and _is_valid_request_id(incoming):
+        return incoming
+    return str(uuid4())
+
+
+def _log_request_completion(
+    request: Request, status_code: int, duration_ms: float
+) -> None:
+    """One structured key=value log line per completed HTTP request.
+
+    ``job_id`` is included only for requests that involve one: ``POST
+    /research`` records it on ``request.state``, while the job endpoints read
+    it from the path params. No job_id is added where none exists.
+    """
+    job_id = getattr(request.state, "job_id", None)
+    if job_id is None:
+        job_id = request.path_params.get("job_id")
+    fields = [
+        f"request_id={getattr(request.state, 'request_id', '-')}",
+        f"method={request.method}",
+        f"path={request.url.path}",
+        f"status={status_code}",
+        f"duration_ms={duration_ms:.2f}",
+    ]
+    if job_id:
+        fields.append(f"job_id={job_id}")
+    logger.info("request completed %s", " ".join(fields))
+
+
+async def request_observability_middleware(
+    request: Request, call_next
+) -> Response:
+    """Attach an ``X-Request-ID`` to every response and log its completion.
+
+    Lightweight by design: only a monotonic clock read, header bookkeeping and
+    one log line — no network, storage, database or pipeline access. When an
+    unhandled exception escapes to the outermost ``ServerErrorMiddleware``,
+    the completion is logged here (status=500) before re-raising; the 500
+    response itself gets its ``X-Request-ID`` from the exception handler,
+    which runs at that same outermost level.
+    """
+    start = time.perf_counter()
+    request_id = _resolve_request_id(request)
+    request.state.request_id = request_id
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (time.perf_counter() - start) * 1000.0
+        _log_request_completion(request, 500, duration_ms)
+        raise
+    response.headers[_REQUEST_ID_HEADER] = request_id
+    duration_ms = (time.perf_counter() - start) * 1000.0
+    _log_request_completion(request, response.status_code, duration_ms)
+    return response
 
 
 # ── CORS (API transport concern only — no auth, no secrets) ─────────────────
@@ -60,7 +154,16 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Accept"],
+    allow_headers=["Content-Type", "Accept", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
+)
+
+# Registered AFTER CORS (Starlette middleware order: last added = outermost),
+# so the observability middleware wraps CORS and even CORS preflight responses
+# carry an ``X-Request-ID``. The outermost ``ServerErrorMiddleware``'s 500
+# responses are covered by the exception handler above.
+app.add_middleware(
+    BaseHTTPMiddleware, dispatch=request_observability_middleware
 )
 
 
@@ -197,21 +300,25 @@ def health() -> dict[str, str]:
 
 @app.post("/research", status_code=202, response_model=ResearchJobResponse)
 def research(
-    request: ResearchRequest,
+    request: Request,
+    payload: ResearchRequest,
     background_tasks: BackgroundTasks,
 ) -> ResearchJobResponse:
     """Submit a research job and return immediately with its job id.
 
     The pipeline runs in the background via ``BackgroundTasks``; the client
-    polls ``GET /research/{job_id}`` for the outcome.
+    polls ``GET /research/{job_id}`` for the outcome. The new job id is
+    recorded on ``request.state`` so the observability middleware can
+    correlate this request's completion log with the job.
     """
     _cleanup_expired_jobs()
     job_id = str(uuid4())
+    request.state.job_id = job_id
     now = _utcnow()
     with _lock:
         _jobs[job_id] = {
             "job_id": job_id,
-            "query": request.query,
+            "query": payload.query,
             "status": "queued",
             "result": None,
             "error": None,
@@ -220,7 +327,7 @@ def research(
             "created_at": now,
             "updated_at": now,
         }
-    background_tasks.add_task(_run_job, job_id, request.query)
+    background_tasks.add_task(_run_job, job_id, payload.query)
     return ResearchJobResponse(job_id=job_id, status="queued")
 
 

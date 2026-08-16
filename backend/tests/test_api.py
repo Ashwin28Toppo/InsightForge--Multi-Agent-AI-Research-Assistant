@@ -8,6 +8,7 @@ test deterministic.
 """
 import asyncio
 import json
+import logging
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -943,3 +944,250 @@ def test_cors_sse_stream_allowed(monkeypatch):
         lines = [line for line in response.iter_lines() if line]
 
     assert "event: completed" in lines
+
+
+# ── Request ID / observability (Phase 2D Step 9) ─────────────────────────────
+
+
+def _completion_records(caplog):
+    """The 'request completed' observability log records for the request."""
+    return [
+        r
+        for r in caplog.records
+        if r.name == "backend.app.api" and "request completed" in r.message
+    ]
+
+
+def test_health_contains_generated_request_id():
+    response = client.get("/health")
+    assert response.status_code == 200
+    rid = response.headers.get("x-request-id")
+    assert rid
+    uuid.UUID(rid)  # generated IDs are valid UUIDs
+
+
+def test_valid_request_id_is_echoed():
+    response = client.get("/health", headers={"X-Request-ID": "manual-test-123"})
+    assert response.headers.get("x-request-id") == "manual-test-123"
+
+
+def test_invalid_request_id_with_newline_is_replaced():
+    response = client.get("/health", headers={"X-Request-ID": "bad\nid"})
+    rid = response.headers.get("x-request-id")
+    assert rid != "bad\nid"
+    uuid.UUID(rid)
+
+
+def test_invalid_request_id_with_carriage_return_is_replaced():
+    response = client.get("/health", headers={"X-Request-ID": "bad\rid"})
+    rid = response.headers.get("x-request-id")
+    assert rid != "bad\rid"
+    uuid.UUID(rid)
+
+
+def test_overlong_request_id_is_replaced():
+    response = client.get("/health", headers={"X-Request-ID": "a" * 200})
+    rid = response.headers.get("x-request-id")
+    assert rid != "a" * 200
+    uuid.UUID(rid)
+
+
+def test_is_valid_request_id_rules():
+    assert api._is_valid_request_id("abc-123")
+    assert api._is_valid_request_id("a" * 128)
+    assert not api._is_valid_request_id("")
+    assert not api._is_valid_request_id("a" * 129)
+    assert not api._is_valid_request_id("bad\nid")
+    assert not api._is_valid_request_id("bad\rid")
+
+
+def test_post_research_response_contains_request_id(monkeypatch):
+    monkeypatch.setattr(api, "_run_job", lambda job_id, query: None)
+    response = client.post("/research", json={"query": "q"})
+    assert response.status_code == 202
+    assert response.headers.get("x-request-id")
+
+
+def test_404_response_contains_request_id():
+    response = client.get("/research/does-not-exist")
+    assert response.status_code == 404
+    assert response.headers.get("x-request-id")
+
+
+def test_422_response_contains_request_id():
+    response = client.post("/research", json={"query": ""})
+    assert response.status_code == 422
+    assert response.headers.get("x-request-id")
+
+
+def test_500_response_contains_request_id(monkeypatch):
+    class _BoomResponse:
+        def __init__(self, **kwargs):
+            raise RuntimeError("response construction boom")
+
+    monkeypatch.setattr(api, "ResearchJobResponse", _BoomResponse)
+    monkeypatch.setattr(api, "_run_job", lambda job_id, query: None)
+
+    response = client.post("/research", json={"query": "q"})
+
+    assert response.status_code == 500
+    assert response.headers.get("x-request-id")
+
+
+def test_progress_response_contains_request_id(monkeypatch):
+    monkeypatch.setattr(api, "_run_job", lambda job_id, query: None)
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+
+    response = client.get(f"/research/{job_id}/progress")
+
+    assert response.status_code == 200
+    assert response.headers.get("x-request-id")
+
+
+def test_sse_response_contains_request_id(monkeypatch):
+    async def fake_streaming(query, on_step=None):
+        for step in ALL_STAGES:
+            if on_step:
+                on_step(step)
+        return dict(REPRESENTATIVE_RESULT)
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_streaming)
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+
+    with client.stream("GET", f"/research/{job_id}/stream") as response:
+        assert response.status_code == 200
+        assert response.headers.get("x-request-id")
+        lines = [line for line in response.iter_lines() if line]
+
+    assert "event: completed" in lines
+
+
+def test_request_log_contains_all_fields(caplog):
+    with caplog.at_level(logging.INFO, logger="backend.app.api"):
+        response = client.get("/health")
+
+    records = _completion_records(caplog)
+    assert records
+    message = records[0].message
+    assert f"request_id={response.headers['x-request-id']}" in message
+    assert "method=GET" in message
+    assert "path=/health" in message
+    assert "status=200" in message
+    assert "duration_ms=" in message
+    duration = message.split("duration_ms=")[1].split()[0]
+    assert float(duration) >= 0  # numeric and non-negative, no exact timing
+
+
+def test_post_research_completion_log_contains_job_id(monkeypatch, caplog):
+    monkeypatch.setattr(api, "_run_job", lambda job_id, query: None)
+    with caplog.at_level(logging.INFO, logger="backend.app.api"):
+        response = client.post("/research", json={"query": "q"})
+    job_id = response.json()["job_id"]
+
+    records = _completion_records(caplog)
+    assert records
+    assert f"job_id={job_id}" in records[-1].message
+    assert "method=POST" in records[-1].message
+    assert "status=202" in records[-1].message
+
+
+def test_job_status_completion_log_contains_job_id(monkeypatch, caplog):
+    monkeypatch.setattr(api, "_run_job", lambda job_id, query: None)
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+
+    with caplog.at_level(logging.INFO, logger="backend.app.api"):
+        client.get(f"/research/{job_id}")
+
+    records = _completion_records(caplog)
+    assert records
+    assert f"job_id={job_id}" in records[-1].message
+    assert "method=GET" in records[-1].message
+    assert f"path=/research/{job_id}" in records[-1].message
+
+
+def test_health_log_has_no_job_id(caplog):
+    with caplog.at_level(logging.INFO, logger="backend.app.api"):
+        client.get("/health")
+
+    records = _completion_records(caplog)
+    assert records
+    assert "job_id=" not in records[0].message
+
+
+def test_request_observability_does_not_execute_pipeline(monkeypatch, caplog):
+    pipeline_calls = []
+
+    async def fake_streaming(query, on_step=None):
+        pipeline_calls.append(query)
+        return dict(REPRESENTATIVE_RESULT)
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_streaming)
+    monkeypatch.setattr(api, "_run_job", lambda job_id, query: None)
+
+    with caplog.at_level(logging.INFO, logger="backend.app.api"):
+        client.get("/health")
+        client.get("/research/unknown")
+        client.get("/research/unknown/progress")
+        client.get("/research/unknown/stream")
+
+    assert pipeline_calls == []  # logging/headers never execute the pipeline
+    assert len(_completion_records(caplog)) == 4  # but every request was logged
+
+
+def test_sse_event_bodies_unchanged(monkeypatch):
+    async def fake_streaming(query, on_step=None):
+        for step in ALL_STAGES:
+            if on_step:
+                on_step(step)
+        return dict(REPRESENTATIVE_RESULT)
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_streaming)
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+
+    with client.stream("GET", f"/research/{job_id}/stream") as response:
+        lines = [line for line in response.iter_lines() if line]
+
+    text = "\n".join(lines)
+    # Event bodies are unchanged: exact payload shape, and no observability
+    # data (request_id) ever leaks into the SSE event JSON.
+    assert "request_id" not in text
+    assert text.startswith("event: ")
+    assert "event: completed" in text
+    payload = _parse_sse_data(text)
+    assert set(payload) == {"job_id", "status", "current_step", "completed_steps"}
+    assert payload["status"] == "completed"
+
+
+def test_request_ids_do_not_leak_between_requests():
+    r1 = client.get("/health", headers={"X-Request-ID": "request-one"})
+    r2 = client.get("/health", headers={"X-Request-ID": "request-two"})
+    assert r1.headers.get("x-request-id") == "request-one"
+    assert r2.headers.get("x-request-id") == "request-two"
+
+    # A headerless request gets its own fresh generated ID, not a stale one.
+    generated = client.get("/health").headers.get("x-request-id")
+    assert generated and generated not in ("request-one", "request-two")
+    uuid.UUID(generated)
+    # Two headerless requests get distinct generated IDs.
+    second = client.get("/health").headers.get("x-request-id")
+    assert second != generated
+
+
+def test_cors_allows_x_request_id_header():
+    response = client.options(
+        "/research",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "x-request-id, content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert (
+        response.headers.get("access-control-allow-origin")
+        == "http://localhost:3000"
+    )
+    allowed = response.headers.get("access-control-allow-headers", "").lower()
+    assert "x-request-id" in allowed
+    # The observability middleware is outermost, so preflight also gets an ID.
+    assert response.headers.get("x-request-id")
