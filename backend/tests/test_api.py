@@ -8,7 +8,9 @@ test deterministic.
 """
 import asyncio
 import json
+import threading
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -449,6 +451,7 @@ ALL_STAGES = [
 def _seed_job(status="queued", current_step=None, completed_steps=None, error=None):
     """Insert a job directly into the in-memory store (offline)."""
     job_id = str(uuid.uuid4())
+    now = api._utcnow()
     with api._lock:
         api._jobs[job_id] = {
             "job_id": job_id,
@@ -458,8 +461,16 @@ def _seed_job(status="queued", current_step=None, completed_steps=None, error=No
             "error": error,
             "current_step": current_step,
             "completed_steps": list(completed_steps or []),
+            "created_at": now,
+            "updated_at": now,
         }
     return job_id
+
+
+def _backdate_job(job_id: str, seconds: int) -> None:
+    """Rewind a job's ``updated_at`` so it appears older (for TTL tests)."""
+    with api._lock:
+        api._jobs[job_id]["updated_at"] = api._utcnow() - timedelta(seconds=seconds)
 
 
 def _parse_sse_data(event: str) -> dict:
@@ -667,6 +678,211 @@ def test_stream_failed_event_contains_no_traceback(monkeypatch):
     assert "event: failed" in event_text
     assert "boom in stream" in event_text
     assert "Traceback" not in event_text
+
+
+# ── Job TTL / timestamps / cleanup (Phase 2D Step 8) ─────────────────────────
+
+
+def test_new_job_contains_timestamps(monkeypatch):
+    monkeypatch.setattr(api, "_run_job", lambda job_id, query: None)
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+
+    with api._lock:
+        job = dict(api._jobs[job_id])
+
+    assert isinstance(job["created_at"], datetime)
+    assert isinstance(job["updated_at"], datetime)
+    assert job["created_at"].tzinfo is not None  # timezone-aware UTC
+    assert job["updated_at"] >= job["created_at"]
+
+
+def test_updated_at_tracks_lifecycle_transitions(monkeypatch):
+    clock = [datetime(2026, 1, 1, tzinfo=timezone.utc)]
+    monkeypatch.setattr(api, "_utcnow", lambda: clock[0])
+    job_id = _seed_job(status="queued")
+    created = api._jobs[job_id]["updated_at"]
+    snapshots = {}
+
+    clock[0] += timedelta(seconds=1)  # queued -> running happens here
+
+    async def fake_streaming(query, on_step=None):
+        with api._lock:
+            snapshots["running"] = dict(api._jobs[job_id])  # running (T1)
+        clock[0] += timedelta(seconds=1)  # progress
+        if on_step:
+            on_step("plan")
+        with api._lock:
+            snapshots["progress"] = dict(api._jobs[job_id])  # progress (T2)
+        clock[0] += timedelta(seconds=1)  # running -> completed
+        return dict(REPRESENTATIVE_RESULT)
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_streaming)
+    api._run_job(job_id, "q")
+
+    final = api._jobs[job_id]
+    assert snapshots["running"]["status"] == "running"
+    assert snapshots["running"]["updated_at"] > created  # queued -> running
+    assert (
+        snapshots["progress"]["updated_at"] > snapshots["running"]["updated_at"]
+    )  # progress
+    assert final["status"] == "completed"
+    assert final["updated_at"] > snapshots["progress"]["updated_at"]  # -> completed
+
+
+def test_updated_at_tracks_failure_transition(monkeypatch):
+    clock = [datetime(2026, 1, 1, tzinfo=timezone.utc)]
+    monkeypatch.setattr(api, "_utcnow", lambda: clock[0])
+    job_id = _seed_job(status="queued")
+    created = api._jobs[job_id]["updated_at"]
+    snapshots = {}
+
+    clock[0] += timedelta(seconds=1)
+
+    async def failing_streaming(query, on_step=None):
+        with api._lock:
+            snapshots["running"] = dict(api._jobs[job_id])  # running (T1)
+        clock[0] += timedelta(seconds=1)  # running -> failed
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", failing_streaming)
+    api._run_job(job_id, "q")
+
+    final = api._jobs[job_id]
+    assert final["status"] == "failed"
+    assert snapshots["running"]["updated_at"] > created  # queued -> running
+    assert final["updated_at"] > snapshots["running"]["updated_at"]  # -> failed
+
+
+def test_cleanup_removes_expired_completed():
+    job_id = _seed_job(status="completed")
+    _backdate_job(job_id, 7200)  # 2 hours > 3600s TTL
+
+    api._cleanup_expired_jobs()
+
+    with api._lock:
+        assert job_id not in api._jobs
+
+
+def test_cleanup_removes_expired_failed():
+    job_id = _seed_job(status="failed", error="RuntimeError: x")
+    _backdate_job(job_id, 7200)
+
+    api._cleanup_expired_jobs()
+
+    with api._lock:
+        assert job_id not in api._jobs
+
+
+def test_cleanup_keeps_queued_even_if_old():
+    job_id = _seed_job(status="queued")
+    _backdate_job(job_id, 7200)
+
+    api._cleanup_expired_jobs()
+
+    with api._lock:
+        assert job_id in api._jobs
+
+
+def test_cleanup_keeps_running_even_if_old():
+    job_id = _seed_job(status="running", current_step="research", completed_steps=["plan"])
+    _backdate_job(job_id, 7200)
+
+    api._cleanup_expired_jobs()
+
+    with api._lock:
+        assert job_id in api._jobs
+
+
+def test_cleanup_keeps_fresh_completed_and_failed():
+    fresh_completed = _seed_job(status="completed")
+    fresh_failed = _seed_job(status="failed", error="RuntimeError: x")
+    _backdate_job(fresh_completed, 10)  # 10s < TTL
+    _backdate_job(fresh_failed, 10)
+
+    api._cleanup_expired_jobs()
+
+    with api._lock:
+        assert fresh_completed in api._jobs
+        assert fresh_failed in api._jobs
+
+
+def test_expired_job_status_returns_404():
+    job_id = _seed_job(status="completed")
+    _backdate_job(job_id, 7200)
+
+    response = client.get(f"/research/{job_id}")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "job not found"}
+
+
+def test_expired_job_progress_returns_404():
+    job_id = _seed_job(status="completed")
+    _backdate_job(job_id, 7200)
+
+    response = client.get(f"/research/{job_id}/progress")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "job not found"}
+
+
+def test_expired_job_stream_returns_404():
+    job_id = _seed_job(status="completed")
+    _backdate_job(job_id, 7200)
+
+    response = client.get(f"/research/{job_id}/stream")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "job not found"}
+
+
+def test_cleanup_does_not_execute_pipeline(monkeypatch):
+    pipeline_calls = []
+
+    async def fake_streaming(query, on_step=None):
+        pipeline_calls.append(query)
+        return dict(REPRESENTATIVE_RESULT)
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_streaming)
+
+    job_id = _seed_job(status="completed")
+    _backdate_job(job_id, 7200)
+    api._cleanup_expired_jobs()
+
+    assert pipeline_calls == []
+    with api._lock:
+        assert job_id not in api._jobs
+
+
+def test_cleanup_is_safe_with_the_lock():
+    completed_ids = []
+    active_ids = []
+    for _ in range(5):
+        completed_ids.append(_seed_job(status="completed"))
+        active_ids.append(_seed_job(status="queued"))
+    for job_id in completed_ids:
+        _backdate_job(job_id, 7200)
+
+    errors = []
+
+    def run_cleanup():
+        try:
+            api._cleanup_expired_jobs()
+        except Exception as exc:  # pragma: no cover
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run_cleanup) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    with api._lock:
+        for job_id in completed_ids:
+            assert job_id not in api._jobs
+        for job_id in active_ids:
+            assert job_id in api._jobs
 
 
 # ── CORS (Phase 2D Step 7) ───────────────────────────────────────────────────

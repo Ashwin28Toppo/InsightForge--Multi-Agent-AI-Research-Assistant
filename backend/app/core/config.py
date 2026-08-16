@@ -97,6 +97,9 @@ class Settings(BaseSettings):
             "http://127.0.0.1:3000",
         ]
     )
+    # How long terminal (completed/failed) jobs remain queryable before they
+    # are cleaned up from the in-memory store.
+    job_ttl_seconds: int = 3600
 
     @field_validator("cors_origins", mode="before")
     @classmethod

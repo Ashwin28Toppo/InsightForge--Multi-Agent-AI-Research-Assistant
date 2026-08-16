@@ -14,6 +14,7 @@ def test_defaults_without_env_file():
     assert s.search_snippet_max_chars == 150
     assert s.run_critic is False
     assert s.cors_origins == ["http://localhost:3000", "http://127.0.0.1:3000"]
+    assert s.job_ttl_seconds == 3600
     assert s.tavily_max_results == 5
     assert s.scrape_max_chars == 3000
 
@@ -76,3 +77,15 @@ def test_cors_origins_default_when_env_absent(monkeypatch):
     monkeypatch.delenv("CORS_ORIGINS", raising=False)
     s = Settings(_env_file=None)
     assert s.cors_origins == ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
+def test_job_ttl_seconds_read_from_env(monkeypatch):
+    monkeypatch.setenv("JOB_TTL_SECONDS", "120")
+    s = Settings(_env_file=None)
+    assert s.job_ttl_seconds == 120
+
+
+def test_job_ttl_seconds_default_when_env_absent(monkeypatch):
+    monkeypatch.delenv("JOB_TTL_SECONDS", raising=False)
+    s = Settings(_env_file=None)
+    assert s.job_ttl_seconds == 3600

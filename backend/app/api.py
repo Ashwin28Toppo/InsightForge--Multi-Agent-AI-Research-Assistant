@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import threading
+from datetime import datetime, timezone
 from typing import AsyncIterator
 from uuid import uuid4
 
@@ -71,6 +72,32 @@ _lock = threading.Lock()
 # How often the SSE stream polls the job store for changes — keeps the stream
 # responsive without busy-spinning the CPU.
 _POLL_INTERVAL_SECONDS = 0.5
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware current UTC time."""
+    return datetime.now(timezone.utc)
+
+
+def _cleanup_expired_jobs() -> None:
+    """Remove terminal jobs older than ``settings.job_ttl_seconds``.
+
+    Only ``completed``/``failed`` jobs are ever deleted; ``queued`` and
+    ``running`` jobs are never touched. Runs under the existing job lock (a
+    single acquisition), is idempotent, and never executes the pipeline.
+    """
+    ttl = settings.job_ttl_seconds
+    now = _utcnow()
+    with _lock:
+        expired = [
+            job_id
+            for job_id, job in _jobs.items()
+            if job.get("status") in ("completed", "failed")
+            and isinstance(job.get("updated_at"), datetime)
+            and (now - job["updated_at"]).total_seconds() > ttl
+        ]
+        for job_id in expired:
+            del _jobs[job_id]
 
 
 class ResearchRequest(BaseModel):
@@ -131,6 +158,7 @@ def _run_job(job_id: str, query: str) -> None:
             job["status"] = "running"
             job["current_step"] = None
             job["completed_steps"] = []
+            job["updated_at"] = _utcnow()
 
     def on_step(step: str) -> None:
         with _lock:
@@ -139,6 +167,7 @@ def _run_job(job_id: str, query: str) -> None:
                 return
             current["current_step"] = step
             current["completed_steps"] = list(current["completed_steps"]) + [step]
+            current["updated_at"] = _utcnow()
 
     try:
         result = asyncio.run(
@@ -150,12 +179,14 @@ def _run_job(job_id: str, query: str) -> None:
             if job is not None:
                 job["status"] = "failed"
                 job["error"] = f"{type(exc).__name__}: {exc}"
+                job["updated_at"] = _utcnow()
         return
 
     with _lock:
         if job is not None:
             job["status"] = "completed"
             job["result"] = result
+            job["updated_at"] = _utcnow()
 
 
 @app.get("/health")
@@ -174,7 +205,9 @@ def research(
     The pipeline runs in the background via ``BackgroundTasks``; the client
     polls ``GET /research/{job_id}`` for the outcome.
     """
+    _cleanup_expired_jobs()
     job_id = str(uuid4())
+    now = _utcnow()
     with _lock:
         _jobs[job_id] = {
             "job_id": job_id,
@@ -184,6 +217,8 @@ def research(
             "error": None,
             "current_step": None,
             "completed_steps": [],
+            "created_at": now,
+            "updated_at": now,
         }
     background_tasks.add_task(_run_job, job_id, request.query)
     return ResearchJobResponse(job_id=job_id, status="queued")
@@ -196,6 +231,7 @@ def research(
 )
 def research_status(job_id: str) -> ResearchStatusResponse:
     """Return the current status/result of a research job (404 if unknown)."""
+    _cleanup_expired_jobs()
     with _lock:
         job = _jobs.get(job_id)
     if job is None:
@@ -217,6 +253,7 @@ def research_progress(job_id: str) -> ResearchProgressResponse:
     the graph; ``completed_steps`` is an ordered event list (stages may repeat
     when the conditional research loop re-runs research).
     """
+    _cleanup_expired_jobs()
     with _lock:
         job = _jobs.get(job_id)
     if job is None:
@@ -311,6 +348,7 @@ async def research_stream(job_id: str) -> StreamingResponse:
     of the stream; the full result is available via
     ``GET /research/{job_id}``.
     """
+    _cleanup_expired_jobs()
     with _lock:
         job = _jobs.get(job_id)
     if job is None:
