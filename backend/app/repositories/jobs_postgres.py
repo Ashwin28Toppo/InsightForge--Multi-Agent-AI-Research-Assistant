@@ -22,8 +22,13 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
+from backend.app.core.config import settings
 from backend.app.db.models import ResearchJob
 from backend.app.db.session import get_sessionmaker
 from backend.app.repositories.jobs import JobRecord, JobStore
@@ -93,7 +98,29 @@ class PostgresJobStore(JobStore):
         self,
         session_factory: async_sessionmaker[AsyncSession] | None = None,
     ) -> None:
-        self._sessionmaker = session_factory or get_sessionmaker()
+        if session_factory is not None:
+            self._sessionmaker = session_factory
+        elif settings.database_url:
+            # Dedicated engine for the store. All store DB work runs on the
+            # ``_SyncBridge`` background loop, and asyncpg connections are
+            # bound to the loop that created them — so this pool must NEVER
+            # be shared with the server event loop (the ``/auth/*`` endpoints
+            # use ``get_sessionmaker()`` on the server loop). Sharing one
+            # pool across the two loops raises "Future attached to a different
+            # loop" on real PostgreSQL. Real PG validation (Phase 2F Step 8)
+            # caught exactly that; a separate pool fixes it.
+            self._engine = create_async_engine(
+                settings.database_url,
+                pool_pre_ping=True,
+            )
+            self._sessionmaker = async_sessionmaker(
+                self._engine,
+                expire_on_commit=False,
+            )
+        else:
+            # No DATABASE_URL: defer to the shared sessionmaker, which raises
+            # a clear error on first use.
+            self._sessionmaker = get_sessionmaker()
         self._bridge = _SyncBridge()
 
     def _new_session(self):
