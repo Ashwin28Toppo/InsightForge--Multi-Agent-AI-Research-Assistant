@@ -12,11 +12,14 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
+from typing import AsyncIterator
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from backend.app.main import arun_research_pipeline_streaming
@@ -37,6 +40,10 @@ app = FastAPI(
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
+
+# How often the SSE stream polls the job store for changes — keeps the stream
+# responsive without busy-spinning the CPU.
+_POLL_INTERVAL_SECONDS = 0.5
 
 
 class ResearchRequest(BaseModel):
@@ -192,4 +199,97 @@ def research_progress(job_id: str) -> ResearchProgressResponse:
         status=job["status"],
         current_step=job.get("current_step"),
         completed_steps=list(job.get("completed_steps") or []),
+    )
+
+
+# ── SSE progress stream (observes only — never runs the pipeline) ────────────
+
+
+def _format_sse(event: str, data: dict) -> str:
+    """Format one Server-Sent Event (``event`` line + JSON ``data`` block)."""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def _progress_payload(job: dict) -> dict:
+    """The progress payload shared by all SSE events."""
+    return {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "current_step": job.get("current_step"),
+        "completed_steps": list(job.get("completed_steps") or []),
+    }
+
+
+def _sse_event_for(job: dict) -> str | None:
+    """Map a job's current state to an SSE event string (None if unknown)."""
+    status = job["status"]
+    payload = _progress_payload(job)
+    if status == "queued":
+        return _format_sse("queued", payload)
+    if status == "running":
+        return _format_sse("progress", payload)
+    if status == "completed":
+        return _format_sse("completed", payload)
+    if status == "failed":
+        # Only the safe error string — never stack traces or internals.
+        payload["error"] = job.get("error")
+        return _format_sse("failed", payload)
+    return None
+
+
+async def _job_event_stream(job_id: str) -> AsyncIterator[str]:
+    """Observe a job and yield SSE events as its state changes.
+
+    This generator NEVER executes the research pipeline — it only reads the
+    in-memory job store (under the job lock) and emits ``queued`` /
+    ``progress`` / ``completed`` / ``failed`` events. The terminal check is
+    performed on a fresh poll at the top of every loop, so a job that reaches
+    ``completed``/``failed`` while an event is being sent is still reported
+    before the stream terminates. A small sleep between polls avoids
+    busy-spinning.
+    """
+    last_signature: tuple | None = None
+    while True:
+        with _lock:
+            job = _jobs.get(job_id)
+        if job is None:
+            return
+
+        # Terminal state: emit the final event once, then stop.
+        if job["status"] in ("completed", "failed"):
+            event = _sse_event_for(job)
+            if event is not None:
+                yield event
+            return
+
+        signature = (
+            job["status"],
+            job.get("current_step"),
+            tuple(job.get("completed_steps") or []),
+        )
+        if signature != last_signature:
+            last_signature = signature
+            event = _sse_event_for(job)
+            if event is not None:
+                yield event
+        await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+
+
+@app.get("/research/{job_id}/stream")
+async def research_stream(job_id: str) -> StreamingResponse:
+    """Stream Server-Sent Events for a research job (404 if unknown).
+
+    The stream only observes the existing job state — it never runs the
+    research pipeline. The final ``completed``/``failed`` event signals the end
+    of the stream; the full result is available via
+    ``GET /research/{job_id}``.
+    """
+    with _lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return StreamingResponse(
+        _job_event_stream(job_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

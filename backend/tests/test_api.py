@@ -7,6 +7,8 @@ background tasks before ``post()`` returns, which keeps every job lifecycle
 test deterministic.
 """
 import asyncio
+import json
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -434,3 +436,174 @@ def test_research_does_not_run_pipeline_synchronously(monkeypatch):
     assert response.json()["status"] == "queued"
     assert pipeline_calls == []  # not run synchronously in the handler
     assert background_calls and background_calls[0][1] == "test query"
+
+
+# ── GET /research/{job_id}/stream (SSE) ──────────────────────────────────────
+
+ALL_STAGES = [
+    "plan", "research", "evidence", "claim_extraction", "fact_check",
+    "citation", "confidence", "writer", "critic",
+]
+
+
+def _seed_job(status="queued", current_step=None, completed_steps=None, error=None):
+    """Insert a job directly into the in-memory store (offline)."""
+    job_id = str(uuid.uuid4())
+    with api._lock:
+        api._jobs[job_id] = {
+            "job_id": job_id,
+            "query": "q",
+            "status": status,
+            "result": None,
+            "error": error,
+            "current_step": current_step,
+            "completed_steps": list(completed_steps or []),
+        }
+    return job_id
+
+
+def _parse_sse_data(event: str) -> dict:
+    """Parse the ``data:`` line of an SSE event into a dict."""
+    for line in event.splitlines():
+        if line.startswith("data: "):
+            return json.loads(line[len("data: "):])
+    raise AssertionError(f"no data line in event: {event!r}")
+
+
+def test_stream_unknown_job_404():
+    response = client.get("/research/does-not-exist/stream")
+    assert response.status_code == 404
+
+
+def test_stream_completed_job_terminates(monkeypatch):
+    async def fake_streaming(query, on_step=None):
+        for step in ALL_STAGES:
+            if on_step:
+                on_step(step)
+        return dict(REPRESENTATIVE_RESULT)
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_streaming)
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+
+    with client.stream("GET", f"/research/{job_id}/stream") as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        lines = [line for line in response.iter_lines() if line]
+
+    assert "event: completed" in lines
+    payload = _parse_sse_data("\n".join(lines))
+    assert payload["status"] == "completed"
+    assert payload["current_step"] == "critic"
+    assert payload["completed_steps"] == ALL_STAGES
+
+
+def test_stream_failed_job_terminates(monkeypatch, caplog):
+    async def failing_streaming(query, on_step=None):
+        if on_step:
+            on_step("plan")
+            on_step("research")
+        raise RuntimeError("boom at claim_extraction")
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", failing_streaming)
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+
+    with client.stream("GET", f"/research/{job_id}/stream") as response:
+        assert response.status_code == 200
+        lines = [line for line in response.iter_lines() if line]
+
+    assert "event: failed" in lines
+    payload = _parse_sse_data("\n".join(lines))
+    assert payload["status"] == "failed"
+    assert "boom at claim_extraction" in payload["error"]
+
+
+def test_stream_queued_event(monkeypatch):
+    monkeypatch.setattr(api, "_POLL_INTERVAL_SECONDS", 0)
+    job_id = _seed_job(status="queued")
+
+    async def first_event():
+        gen = api._job_event_stream(job_id)
+        return await gen.__anext__()
+
+    event = asyncio.run(first_event())
+    assert event.startswith("event: queued\n")
+    payload = _parse_sse_data(event)
+    assert payload["status"] == "queued"
+    assert payload["current_step"] is None
+    assert payload["completed_steps"] == []
+
+
+def test_stream_running_progress_event(monkeypatch):
+    monkeypatch.setattr(api, "_POLL_INTERVAL_SECONDS", 0)
+    job_id = _seed_job(
+        status="running",
+        current_step="fact_check",
+        completed_steps=["plan", "research", "evidence", "claim_extraction"],
+    )
+
+    async def first_event():
+        gen = api._job_event_stream(job_id)
+        return await gen.__anext__()
+
+    event = asyncio.run(first_event())
+    assert event.startswith("event: progress\n")
+    payload = _parse_sse_data(event)
+    assert payload["status"] == "running"
+    assert payload["current_step"] == "fact_check"
+    assert payload["completed_steps"] == [
+        "plan", "research", "evidence", "claim_extraction",
+    ]
+
+
+def test_stream_event_sequence_and_termination(monkeypatch):
+    monkeypatch.setattr(api, "_POLL_INTERVAL_SECONDS", 0)
+    job_id = _seed_job(status="queued")
+
+    async def drive():
+        gen = api._job_event_stream(job_id)
+        events = [await gen.__anext__()]  # queued
+        with api._lock:
+            job = api._jobs[job_id]
+            job["status"] = "running"
+            job["current_step"] = "evidence"
+            job["completed_steps"] = ["plan", "research", "evidence"]
+        events.append(await gen.__anext__())  # progress
+        with api._lock:
+            job = api._jobs[job_id]
+            job["status"] = "completed"
+            job["current_step"] = "critic"
+            job["completed_steps"] = list(ALL_STAGES)
+        events.append(await gen.__anext__())  # completed
+        with pytest.raises(StopAsyncIteration):
+            await gen.__anext__()  # stream terminated after completed
+        return events
+
+    events = asyncio.run(drive())
+    assert events[0].startswith("event: queued\n")
+    assert events[1].startswith("event: progress\n")
+    assert events[2].startswith("event: completed\n")
+    assert "\"current_step\": \"evidence\"" in events[1]
+    assert "\"current_step\": \"critic\"" in events[2]
+
+
+def test_stream_does_not_execute_pipeline(monkeypatch):
+    pipeline_calls = []
+
+    async def fake_streaming(query, on_step=None):
+        pipeline_calls.append(query)
+        for step in ALL_STAGES:
+            if on_step:
+                on_step(step)
+        return dict(REPRESENTATIVE_RESULT)
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_streaming)
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+    assert pipeline_calls == ["q"]  # POST's background run
+
+    # Opening the SSE stream must NOT invoke the pipeline again.
+    with client.stream("GET", f"/research/{job_id}/stream") as response:
+        assert response.status_code == 200
+        lines = [line for line in response.iter_lines() if line]
+
+    assert "event: completed" in lines
+    assert pipeline_calls == ["q"]  # still exactly one invocation (from POST)
