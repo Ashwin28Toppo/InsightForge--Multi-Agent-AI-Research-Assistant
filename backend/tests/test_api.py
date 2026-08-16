@@ -1215,12 +1215,20 @@ def test_openapi_lists_all_endpoints_and_methods():
         "/research/{job_id}",
         "/research/{job_id}/progress",
         "/research/{job_id}/stream",
+        "/auth/signup",
+        "/auth/login",
+        "/auth/logout",
+        "/auth/me",
     }
     assert list(spec["paths"]["/health"]) == ["get"]
     assert list(spec["paths"]["/research"]) == ["post"]
     assert list(spec["paths"]["/research/{job_id}"]) == ["get"]
     assert list(spec["paths"]["/research/{job_id}/progress"]) == ["get"]
     assert list(spec["paths"]["/research/{job_id}/stream"]) == ["get"]
+    assert list(spec["paths"]["/auth/signup"]) == ["post"]
+    assert list(spec["paths"]["/auth/login"]) == ["post"]
+    assert list(spec["paths"]["/auth/logout"]) == ["post"]
+    assert list(spec["paths"]["/auth/me"]) == ["get"]
 
 
 def _resolve_ref(spec: dict, schema: dict) -> dict:

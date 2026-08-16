@@ -33,6 +33,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend.app.core.config import settings
 from backend.app.main import arun_research_pipeline_streaming
+from backend.app.auth.router import router as auth_router
 from backend.app.repositories.jobs import (
     InMemoryJobStore,
     JobRecord,
@@ -175,6 +176,11 @@ app.add_middleware(
 app.add_middleware(
     BaseHTTPMiddleware, dispatch=request_observability_middleware
 )
+
+# ── Auth endpoints (Phase 2F Step 3) ────────────────────────────────────────
+# /auth/signup, /auth/login, /auth/logout, /auth/me. The research endpoints
+# remain public until Phase 2F Step 4 (user ownership).
+app.include_router(auth_router)
 
 
 # ── Job store (Phase 2F Step 2) ─────────────────────────────────────────────

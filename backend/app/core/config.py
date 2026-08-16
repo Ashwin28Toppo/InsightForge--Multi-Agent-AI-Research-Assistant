@@ -109,6 +109,22 @@ class Settings(BaseSettings):
     #   postgresql+asyncpg://user:password@host:5432/insightforge
     database_url: str | None = None
 
+    # ── Authentication (Phase 2F Step 3) ──────────────────────────────────
+    # JWT signing secret. The default is a clearly fake DEVELOPMENT
+    # placeholder (>=32 bytes so PyJWT's HS256 key-length check stays quiet) —
+    # production MUST set a strong random AUTH_JWT_SECRET.
+    # An empty value is rejected at token time (never a silent fallback).
+    auth_jwt_secret: str = (
+        "change-me-in-development-0123456789abcdef0123456789abcdef"
+    )
+    auth_jwt_algorithm: str = "HS256"
+    auth_jwt_expire_minutes: int = 60
+    auth_cookie_name: str = "insightforge_access"
+    # HttpOnly access cookie flags. Secure must be true behind HTTPS in
+    # production; SameSite=lax keeps the cookie off cross-site requests.
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: str = "lax"
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_cors_origins(cls, value: object) -> object:
