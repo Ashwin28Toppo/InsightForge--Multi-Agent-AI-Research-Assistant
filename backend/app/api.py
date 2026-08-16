@@ -48,6 +48,7 @@ from backend.app.repositories.jobs import (
     JobRecord,
     JobStore,
 )
+from backend.app.repositories.jobs_postgres import PostgresJobStore
 
 logger = logging.getLogger(__name__)
 
@@ -192,13 +193,16 @@ app.add_middleware(
 app.include_router(auth_router)
 
 
-# ── Job store (Phase 2F Step 2) ─────────────────────────────────────────────
-# The API interacts ONLY with the JobStore abstraction — never a raw dict. The
-# current implementation is in-memory by design (jobs are lost on restart); a
-# PostgreSQL-backed store will be introduced in a later phase behind the same
-# interface, without changing the HTTP/SSE contract.
+# ── Job store (Phase 2F Steps 2 & 5) ────────────────────────────────────────
+# The API interacts ONLY with the JobStore abstraction — never a raw dict. When
+# ``DATABASE_URL`` is configured the production store is PostgreSQL-backed
+# (jobs survive restarts and are shared across workers); otherwise the app
+# falls back to the in-memory store so it still runs without a database (the
+# pre-Step-5 behavior). Ownership and all other semantics are identical.
 
-store: JobStore = InMemoryJobStore()
+store: JobStore = (
+    PostgresJobStore() if settings.database_url else InMemoryJobStore()
+)
 
 # How often the SSE stream polls the job store for changes — keeps the stream
 # responsive without busy-spinning the CPU.
