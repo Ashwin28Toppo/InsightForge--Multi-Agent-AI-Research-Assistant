@@ -114,6 +114,52 @@ async def arun_research_pipeline(query: str) -> ResearchState:
     return _to_application_result(state)
 
 
+# Logical research stages surfaced as progress events. The graph's
+# ``increment_rounds`` loop bookkeeping node is intentionally not exposed.
+_PROGRESS_STAGES = (
+    "plan",
+    "research",
+    "evidence",
+    "claim_extraction",
+    "fact_check",
+    "citation",
+    "confidence",
+    "writer",
+    "critic",
+)
+
+
+async def arun_research_pipeline_streaming(
+    query: str,
+    on_step: Optional[Callable[[str], None]] = None,
+) -> ResearchState:
+    """Async variant that streams per-node progress (API layer).
+
+    Consumes ``research_graph.astream(..., stream_mode="updates")`` so each
+    node's completion can be reported live via ``on_step`` (progress belongs at
+    the application/API boundary — graph nodes stay HTTP-agnostic), then maps
+    the final state with the same result-conversion logic as every other entry
+    point.
+
+    ``on_step`` fires for each logical research stage as it completes; the
+    graph's internal ``increment_rounds`` bookkeeping is not surfaced. When the
+    conditional research loop runs, the same stage is reported again — the
+    consumer sees an ordered event stream and must treat repeats as repeated
+    research (never as a finished workflow).
+    """
+    final_state: dict = {}
+    async for chunk in research_graph.astream(
+        {"query": query}, stream_mode="updates"
+    ):
+        for node, update in chunk.items():
+            if not isinstance(update, dict):
+                continue
+            final_state.update(update)
+            if on_step is not None and node in _PROGRESS_STAGES:
+                on_step(node)
+    return _to_application_result(final_state)
+
+
 if __name__ == "__main__":
     topic = input("\n Enter a research topic : ")
     result = run_research_pipeline(topic)

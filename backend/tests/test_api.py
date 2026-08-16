@@ -57,6 +57,39 @@ class FakeAsyncGraph:
         return dict(self.state)
 
 
+STAGE_UPDATES = [
+    ("plan", {"research_plan": {"research_angles": ["a"], "use_rag": False}}),
+    ("research", {"search_results": "s", "sources": ["https://a.com"]}),
+    ("evidence", {"evidence": [{"id": "E1", "source_type": "web"}]}),
+    ("claim_extraction", {"claims": ["c"]}),
+    ("fact_check", {"fact_checks": [{"claim": "c", "verdict": "supported", "confidence": 0.9, "evidence_refs": ["E1"]}]}),
+    ("citation", {"citations": [{"index": 1, "url": "https://a.com"}]}),
+    ("confidence", {"confidence": "high"}),
+    ("writer", {"report_draft": "Final research report"}),
+    ("critic", {"critic_feedback": "Score: 9/10", "critic_score": 9}),
+]
+
+
+class FakeAsyncStreamingGraph:
+    """Fake graph that streams node updates via ``astream`` (like the real graph).
+
+    ``updates`` is a list of ``(node, update)``; ``error_at`` makes the graph
+    raise while streaming that node, simulating a mid-pipeline failure.
+    """
+
+    def __init__(self, updates=None, error_at=None):
+        self.updates = updates or []
+        self.error_at = error_at
+        self.astream_calls = []
+
+    async def astream(self, inputs, **kwargs):
+        self.astream_calls.append((inputs, kwargs))
+        for node, update in self.updates:
+            if node == self.error_at:
+                raise RuntimeError(f"boom at {node}")
+            yield {node: update}
+
+
 # ── GET /health ──────────────────────────────────────────────────────────────
 
 
@@ -93,9 +126,13 @@ def test_arun_research_pipeline_raises_when_graph_raises(monkeypatch):
 
 
 def test_sync_and_async_entry_points_share_one_graph():
-    # No second graph: both entry points reference the same compiled graph.
+    # No second graph: every entry point references the same compiled graph.
     assert (
         main_mod.arun_research_pipeline.__globals__["research_graph"]
+        is main_mod.research_graph
+    )
+    assert (
+        main_mod.arun_research_pipeline_streaming.__globals__["research_graph"]
         is main_mod.research_graph
     )
     assert (
@@ -104,17 +141,73 @@ def test_sync_and_async_entry_points_share_one_graph():
     )
 
 
+# ── Application streaming entry point (main.arun_research_pipeline_streaming) ─
+
+
+def test_arun_streaming_reports_stages_in_order(monkeypatch):
+    graph = FakeAsyncStreamingGraph(updates=STAGE_UPDATES)
+    monkeypatch.setattr(main_mod, "research_graph", graph)
+
+    events = []
+    result = asyncio.run(
+        main_mod.arun_research_pipeline_streaming("q", on_step=events.append)
+    )
+
+    assert graph.astream_calls[0][0] == {"query": "q"}
+    assert events == [
+        "plan", "research", "evidence", "claim_extraction", "fact_check",
+        "citation", "confidence", "writer", "critic",
+    ]
+    assert result["report"] == "Final research report"  # result mapping intact
+    assert result["errors"] == []
+
+
+def test_arun_streaming_reports_repeated_research_rounds(monkeypatch):
+    # Second round triggered by the conditional research loop (research re-runs
+    # without plan; increment_rounds bookkeeping is not surfaced).
+    loop_updates = list(STAGE_UPDATES) + [
+        ("research", {"search_results": "s2", "sources": ["https://b.com"]}),
+        ("evidence", {"evidence": [{"id": "E2", "source_type": "web"}]}),
+        ("claim_extraction", {"claims": ["c2"]}),
+        ("fact_check", {"fact_checks": [{"claim": "c2", "verdict": "supported", "confidence": 0.8, "evidence_refs": ["E2"]}]}),
+        ("citation", {"citations": [{"index": 2, "url": "https://b.com"}]}),
+        ("confidence", {"confidence": "high"}),
+        ("writer", {"report_draft": "Final research report"}),
+        ("critic", {"critic_feedback": "Score: 9/10", "critic_score": 9}),
+    ]
+    graph = FakeAsyncStreamingGraph(updates=loop_updates)
+    monkeypatch.setattr(main_mod, "research_graph", graph)
+
+    events = []
+    result = asyncio.run(
+        main_mod.arun_research_pipeline_streaming("q", on_step=events.append)
+    )
+
+    assert events.count("research") == 2  # repeated research represented safely
+    assert events.count("plan") == 1
+    assert events[-1] == "critic"
+    assert result["report"] == "Final research report"  # final result unchanged
+
+
+def test_arun_streaming_raises_when_graph_raises(monkeypatch):
+    graph = FakeAsyncStreamingGraph(updates=STAGE_UPDATES, error_at="fact_check")
+    monkeypatch.setattr(main_mod, "research_graph", graph)
+
+    with pytest.raises(RuntimeError, match="boom at fact_check"):
+        asyncio.run(main_mod.arun_research_pipeline_streaming("q"))
+
+
 # ── POST /research ───────────────────────────────────────────────────────────
 
 
 def test_research_returns_202_and_runs_async_pipeline(monkeypatch):
     pipeline_calls = []
 
-    async def fake_pipeline(query):
+    async def fake_pipeline(query, on_step=None):
         pipeline_calls.append(query)
         return dict(REPRESENTATIVE_RESULT)
 
-    monkeypatch.setattr(api, "arun_research_pipeline", fake_pipeline)
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_pipeline)
 
     response = client.post("/research", json={"query": "test query"})
 
@@ -188,10 +281,10 @@ def test_get_running_job(monkeypatch):
 
 
 def test_get_completed_job_preserves_result(monkeypatch):
-    async def fake_pipeline(query):
+    async def fake_pipeline(query, on_step=None):
         return dict(REPRESENTATIVE_RESULT)
 
-    monkeypatch.setattr(api, "arun_research_pipeline", fake_pipeline)
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_pipeline)
 
     job_id = client.post("/research", json={"query": "test query"}).json()["job_id"]
     response = client.get(f"/research/{job_id}")
@@ -208,10 +301,10 @@ def test_get_completed_job_preserves_result(monkeypatch):
 
 
 def test_get_failed_job_has_error_and_is_logged(monkeypatch, caplog):
-    async def failing_pipeline(query):
+    async def failing_pipeline(query, on_step=None):
         raise RuntimeError("async boom")
 
-    monkeypatch.setattr(api, "arun_research_pipeline", failing_pipeline)
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", failing_pipeline)
 
     job_id = client.post("/research", json={"query": "boom"}).json()["job_id"]
     response = client.get(f"/research/{job_id}")
@@ -229,6 +322,93 @@ def test_get_nonexistent_job_404():
     assert response.status_code == 404
 
 
+# ── GET /research/{job_id}/progress ──────────────────────────────────────────
+
+
+def test_progress_unknown_job_404():
+    response = client.get("/research/does-not-exist/progress")
+    assert response.status_code == 404
+
+
+def test_progress_queued_job(monkeypatch):
+    monkeypatch.setattr(api, "_run_job", lambda job_id, query: None)
+
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+    response = client.get(f"/research/{job_id}/progress")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job_id"] == job_id
+    assert body["status"] == "queued"
+    assert body["current_step"] is None
+    assert body["completed_steps"] == []
+
+
+def test_progress_running_job_exposes_current_step(monkeypatch):
+    def mark_running(job_id, query):
+        with api._lock:
+            api._jobs[job_id]["status"] = "running"
+            api._jobs[job_id]["current_step"] = "fact_check"
+            api._jobs[job_id]["completed_steps"] = [
+                "plan", "research", "evidence", "claim_extraction",
+            ]
+
+    monkeypatch.setattr(api, "_run_job", mark_running)
+
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+    response = client.get(f"/research/{job_id}/progress")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "running"
+    assert body["current_step"] == "fact_check"
+    assert body["completed_steps"] == ["plan", "research", "evidence", "claim_extraction"]
+
+
+def test_progress_completed_job_reflects_stream(monkeypatch):
+    stages = [
+        "plan", "research", "evidence", "claim_extraction", "fact_check",
+        "citation", "confidence", "writer", "critic",
+    ]
+
+    async def fake_streaming(query, on_step=None):
+        for step in stages:
+            if on_step:
+                on_step(step)
+        return dict(REPRESENTATIVE_RESULT)
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_streaming)
+
+    job_id = client.post("/research", json={"query": "test query"}).json()["job_id"]
+    progress = client.get(f"/research/{job_id}/progress").json()
+    status = client.get(f"/research/{job_id}").json()
+
+    assert progress["status"] == "completed"
+    assert progress["current_step"] == "critic"
+    assert progress["completed_steps"] == stages
+    # Status/result contract is unchanged.
+    assert status["status"] == "completed"
+    assert status["result"]["report"] == "Final research report"
+
+
+def test_progress_failed_job_exposes_steps(monkeypatch, caplog):
+    async def failing_streaming(query, on_step=None):
+        if on_step:
+            on_step("plan")
+            on_step("research")
+        raise RuntimeError("boom at claim_extraction")
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", failing_streaming)
+
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+    progress = client.get(f"/research/{job_id}/progress").json()
+
+    assert progress["status"] == "failed"
+    assert progress["current_step"] == "research"
+    assert progress["completed_steps"] == ["plan", "research"]
+    assert any("research job" in record.message for record in caplog.records)
+
+
 # ── Non-blocking submission guarantee ────────────────────────────────────────
 
 
@@ -236,11 +416,11 @@ def test_research_does_not_run_pipeline_synchronously(monkeypatch):
     pipeline_calls = []
     background_calls = []
 
-    async def fake_pipeline(query):
+    async def fake_pipeline(query, on_step=None):
         pipeline_calls.append(query)
         return dict(REPRESENTATIVE_RESULT)
 
-    monkeypatch.setattr(api, "arun_research_pipeline", fake_pipeline)
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_pipeline)
     monkeypatch.setattr(
         api,
         "_run_job",
