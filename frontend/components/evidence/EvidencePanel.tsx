@@ -11,12 +11,12 @@ export function EvidenceCard({ item }: { item: Evidence }) {
   return (
     <div className="p-3.5 bg-card border border-border rounded-xl space-y-2.5 hover:border-border-strong transition-all">
       <div className="flex items-center justify-between gap-2 text-[9px] font-mono">
-        <div className="flex items-center gap-1.5">
-          <span className="px-1.5 py-0.5 rounded bg-muted border border-border text-primary font-bold">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="px-1.5 py-0.5 rounded bg-muted border border-border text-primary font-bold shrink-0">
             {item.id || "E?"}
           </span>
           <span
-            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded uppercase font-bold ${
+            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded uppercase font-bold shrink-0 ${
               isRag
                 ? "bg-info/10 text-info border border-info/20"
                 : "bg-primary/10 text-primary border border-primary/20"
@@ -25,9 +25,16 @@ export function EvidenceCard({ item }: { item: Evidence }) {
             {isRag ? <Database size={9} /> : <Globe size={9} />}
             {item.source_type || "web"}
           </span>
+          {isRag && (item.page != null || item.chunk_index != null) && (
+            <span className="text-muted-foreground truncate">
+              {item.page != null ? `p.${item.page}` : ""}
+              {item.page != null && item.chunk_index != null ? " · " : ""}
+              {item.chunk_index != null ? `ch.${item.chunk_index}` : ""}
+            </span>
+          )}
         </div>
         {typeof item.score === "number" && (
-          <span className="text-muted-foreground">
+          <span className="text-muted-foreground shrink-0">
             relevance {Math.round(item.score * 100)}%
           </span>
         )}
@@ -50,11 +57,11 @@ export function EvidenceCard({ item }: { item: Evidence }) {
           href={item.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-[9px] text-info hover:underline font-mono cursor-pointer"
+          className="inline-flex items-center gap-1 text-[10px] text-info hover:underline font-mono cursor-pointer"
         >
-          <FileText size={9} />
-          <span>{getDomain(item.url)}</span>
-          <ExternalLink size={9} />
+          <FileText size={10} />
+          <span className="truncate max-w-[220px]">{getDomain(item.url)}</span>
+          <ExternalLink size={10} />
         </a>
       )}
     </div>

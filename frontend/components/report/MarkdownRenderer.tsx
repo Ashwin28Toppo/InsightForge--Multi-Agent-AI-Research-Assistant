@@ -115,7 +115,7 @@ export default function MarkdownRenderer({
   const pushParagraph = (buffer: string[]) => {
     if (buffer.length === 0) return;
     blocks.push(
-      <p key={key++} className="text-sm md:text-[15px] text-foreground/90 leading-7">
+      <p key={key++} className="text-sm md:text-[15px] text-foreground/90 leading-7 md:leading-8">
         <Inline text={buffer.join(" ")} onCitationRef={onCitationRef} />
       </p>
     );
@@ -135,19 +135,19 @@ export default function MarkdownRenderer({
       const content = heading[2];
       if (level === 1) {
         blocks.push(
-          <h1 key={key++} className="text-2xl md:text-3xl font-bold font-syne tracking-tight text-foreground mt-2 mb-4">
+          <h1 key={key++} className="text-[1.65rem] md:text-3xl font-bold font-syne tracking-tight text-foreground mt-2 mb-5">
             <Inline text={content} onCitationRef={onCitationRef} />
           </h1>
         );
       } else if (level === 2) {
         blocks.push(
-          <h2 key={key++} className="text-lg md:text-xl font-bold font-syne tracking-tight text-foreground mt-8 mb-3 pb-2 border-b border-border">
+          <h2 key={key++} className="text-lg md:text-xl font-bold font-syne tracking-tight text-foreground mt-10 mb-4 pb-2 border-b border-border">
             <Inline text={content} onCitationRef={onCitationRef} />
           </h2>
         );
       } else {
         blocks.push(
-          <h3 key={key++} className="text-base font-semibold text-foreground mt-6 mb-2">
+          <h3 key={key++} className="text-base font-semibold text-foreground mt-8 mb-3">
             <Inline text={content} onCitationRef={onCitationRef} />
           </h3>
         );

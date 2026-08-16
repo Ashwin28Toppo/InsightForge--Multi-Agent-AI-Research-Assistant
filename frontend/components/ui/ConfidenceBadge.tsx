@@ -26,7 +26,7 @@ const TONES: Record<
   low: {
     label: "Low",
     icon: <Minus size={11} />,
-    classes: "border-warning/30 bg-warning/5 text-warning",
+    classes: "border-info/30 bg-info/5 text-info",
   },
 };
 

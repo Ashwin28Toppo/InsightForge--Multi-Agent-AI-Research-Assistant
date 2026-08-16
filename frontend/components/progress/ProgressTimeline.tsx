@@ -62,9 +62,15 @@ export default function ProgressTimeline({
   const allDone =
     stages.length > 0 && completedSteps.length >= stages.length;
 
+  // The activity line mirrors the positional highlight: the stage matching
+  // current_step, or the next pending stage when no step is reported yet.
+  const activeIndex = stages.findIndex((s) => s.key === currentStep);
+  const activityStage =
+    activeIndex >= 0 ? stages[activeIndex] : stages[completedSteps.length];
+
   return (
     <div className="w-full bg-card border border-border rounded-xl p-5 md:p-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground font-mono">
             Pipeline Activity
@@ -73,9 +79,15 @@ export default function ProgressTimeline({
             {completedSteps.length} of {stages.length} stages completed
           </p>
         </div>
-        <div className="px-2.5 py-1 rounded-md bg-muted border border-border text-[10px] font-mono font-semibold text-primary uppercase select-none">
+        <div
+          className={`px-2.5 py-1 rounded-md bg-muted border text-[10px] font-mono font-semibold uppercase select-none ${
+            allDone
+              ? "border-success/30 text-success"
+              : "border-border text-primary"
+          }`}
+        >
           {currentStep
-            ? `Running: ${currentStep}`
+            ? `Running: ${activityStage?.label ?? currentStep}`
             : allDone
               ? "Complete"
               : "Idle"}
@@ -105,7 +117,7 @@ export default function ProgressTimeline({
                     ${status === "completed"
                       ? "bg-primary/10 border-primary text-primary"
                       : status === "active"
-                        ? "bg-background border-primary text-primary active-pulse ring-2 ring-primary/20 scale-105"
+                        ? "bg-background border-primary text-primary active-pulse motion-reduce:animate-none ring-2 ring-primary/20 scale-105"
                         : "bg-background border-border text-muted-foreground"
                     }`}
                   aria-current={status === "active" ? "step" : undefined}
@@ -119,7 +131,7 @@ export default function ProgressTimeline({
                   ) : status === "active" ? (
                     <CircleDot
                       size={18}
-                      className="animate-spin duration-3000"
+                      className="animate-spin duration-3000 motion-reduce:animate-none"
                       aria-label="active"
                     />
                   ) : (
@@ -154,6 +166,36 @@ export default function ProgressTimeline({
           })}
         </div>
       </ol>
+
+      {/* Current activity — answers “which stage is running right now?” */}
+      <div className="mt-5 pt-4 border-t border-border flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-xs text-muted-foreground min-w-0">
+          {activityStage ? (
+            <>
+              <span className="font-mono font-semibold uppercase tracking-wider text-primary">
+                Active
+              </span>
+              <span className="ml-2 font-medium text-foreground/90">
+                {activityStage.label}
+              </span>
+              {activityStage.desc && (
+                <span className="ml-2 hidden sm:inline text-muted-foreground">
+                  — {activityStage.desc}
+                </span>
+              )}
+            </>
+          ) : allDone ? (
+            <span className="font-semibold text-success">
+              All stages complete
+            </span>
+          ) : (
+            <span>Waiting for the worker to report a step…</span>
+          )}
+        </p>
+        <span className="text-[10px] font-mono text-muted-foreground select-none shrink-0">
+          {completedSteps.length}/{stages.length}
+        </span>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Calendar, Clock, Trash2 } from "lucide-react";
 import StatusBadge from "@/components/ui/StatusBadge";
 import ConfidenceBadge from "@/components/ui/ConfidenceBadge";
@@ -23,6 +23,27 @@ interface HistoryItemProps {
 }
 
 export default function HistoryItem({ item, onOpen, onDelete }: HistoryItemProps) {
+  const [confirming, setConfirming] = useState(false);
+  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clear any pending auto-disarm timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (confirmTimer.current) clearTimeout(confirmTimer.current);
+    };
+  }, []);
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirming) {
+      setConfirming(true);
+      confirmTimer.current = setTimeout(() => setConfirming(false), 2500);
+      return;
+    }
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
+    onDelete(item.jobId);
+  };
+
   return (
     <div
       onClick={() => onOpen(item.jobId)}
@@ -54,7 +75,7 @@ export default function HistoryItem({ item, onOpen, onDelete }: HistoryItemProps
           )}
         </div>
 
-        <h3 className="text-sm font-semibold text-foreground leading-normal group-hover:text-primary transition-colors truncate">
+        <h3 className="text-sm font-semibold text-foreground leading-normal group-hover:text-primary transition-colors line-clamp-2">
           {item.query}
         </h3>
 
@@ -76,15 +97,26 @@ export default function HistoryItem({ item, onOpen, onDelete }: HistoryItemProps
 
         <button
           type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(item.jobId);
-          }}
-          className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg cursor-pointer transition-all"
-          title="Delete record"
-          aria-label={`Delete research: ${item.query}`}
+          onClick={handleDeleteClick}
+          className={`p-2 rounded-lg cursor-pointer transition-all ${
+            confirming
+              ? "text-destructive bg-destructive/10 border border-destructive/30"
+              : "text-muted-foreground hover:text-destructive hover:bg-destructive/10 border border-transparent"
+          }`}
+          title={confirming ? "Click again to confirm deletion" : "Delete record"}
+          aria-label={
+            confirming
+              ? `Confirm delete research: ${item.query}`
+              : `Delete research: ${item.query}`
+          }
         >
-          <Trash2 size={15} />
+          {confirming ? (
+            <span className="text-[10px] font-mono font-bold px-0.5">
+              Confirm?
+            </span>
+          ) : (
+            <Trash2 size={15} />
+          )}
         </button>
       </div>
     </div>

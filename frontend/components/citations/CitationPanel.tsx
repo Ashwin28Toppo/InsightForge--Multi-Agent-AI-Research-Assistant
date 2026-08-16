@@ -42,9 +42,9 @@ export function CitationCard({
         </h4>
       </div>
 
-      <div className="flex items-center gap-2 text-[9px] font-mono text-muted-foreground pl-7">
+      <div className="flex items-center gap-2 text-[9px] font-mono text-muted-foreground pl-7 min-w-0">
         <span
-          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded uppercase font-bold ${
+          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded uppercase font-bold shrink-0 ${
             isRag
               ? "bg-info/10 text-info border border-info/20"
               : "bg-primary/10 text-primary border border-primary/20"
@@ -53,6 +53,13 @@ export function CitationCard({
           {isRag ? <Database size={9} /> : <Globe size={9} />}
           {citation.source_type || "web"}
         </span>
+        {isRag && (citation.page != null || citation.chunk_index != null) && (
+          <span className="truncate">
+            {citation.page != null ? `p.${citation.page}` : ""}
+            {citation.page != null && citation.chunk_index != null ? " · " : ""}
+            {citation.chunk_index != null ? `ch.${citation.chunk_index}` : ""}
+          </span>
+        )}
         <span className="truncate">{getDomain(citation.url)}</span>
       </div>
 
@@ -62,10 +69,10 @@ export function CitationCard({
           target="_blank"
           rel="noopener noreferrer"
           onClick={(e) => e.stopPropagation()}
-          className="inline-flex items-center gap-1 text-[9px] text-info hover:underline font-mono pl-7 cursor-pointer"
+          className="inline-flex items-center gap-1 text-[10px] text-info hover:underline font-mono pl-7 min-w-0 cursor-pointer"
         >
           <span className="truncate max-w-[220px]">{citation.url}</span>
-          <ExternalLink size={9} />
+          <ExternalLink size={10} className="shrink-0" />
         </a>
       )}
     </div>

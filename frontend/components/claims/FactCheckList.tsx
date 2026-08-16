@@ -24,11 +24,11 @@ export function VerdictBadge({ verdict }: { verdict?: string }) {
   } else if (v.includes("research") || v.includes("unclear") || v === "needs more research") {
     icon = <SearchCheck size={11} />;
     label = "Needs research";
-    classes = "border-warning/30 bg-warning/5 text-warning";
+    classes = "border-info/30 bg-info/5 text-info";
   } else if (v === "unverified") {
     icon = <ShieldCheck size={11} />;
     label = "Unverified";
-    classes = "border-warning/30 bg-warning/5 text-warning";
+    classes = "border-info/30 bg-info/5 text-info";
   }
 
   return (

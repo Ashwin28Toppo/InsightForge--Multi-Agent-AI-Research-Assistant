@@ -50,9 +50,7 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
       {/* Mobile Sidebar overlay */}
       {sidebarOpen && (
-        <div 
-          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-xs lg:hidden"
-          onClick={() => setSidebarOpen(false)}
+            <div
         />
       )}
 
@@ -75,9 +73,10 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
               </span>
             )}
           </Link>
-          <button 
-            className="lg:hidden text-muted-foreground hover:text-foreground"
+          <button
+            className="lg:hidden text-muted-foreground hover:text-foreground cursor-pointer"
             onClick={() => setSidebarOpen(false)}
+            aria-label="Close navigation menu"
           >
             <X size={20} />
           </button>
@@ -112,7 +111,8 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
           {/* Collapse toggle (desktop only) */}
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="hidden lg:flex items-center gap-3 w-full px-3 py-2 rounded-lg text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground transition-all uppercase tracking-wider"
+            aria-pressed={sidebarCollapsed}
+            className="hidden lg:flex items-center gap-3 w-full px-3 py-2 rounded-lg text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground transition-all uppercase tracking-wider cursor-pointer"
           >
             {sidebarCollapsed ? (
               <>
@@ -148,7 +148,8 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
           <div className="flex items-center gap-4">
             <button
               onClick={() => setSidebarOpen(true)}
-              className="lg:hidden p-1 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="lg:hidden p-1 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer"
+              aria-label="Open navigation menu"
             >
               <Menu size={20} />
             </button>
@@ -168,9 +169,9 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
                 <span
                   className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
                     status === "online"
-                      ? "animate-ping bg-success"
+                      ? "animate-ping bg-success motion-reduce:animate-none"
                       : status === "checking"
-                        ? "animate-ping bg-warning"
+                        ? "animate-ping bg-info motion-reduce:animate-none"
                         : "bg-destructive"
                   }`}
                 />
@@ -179,7 +180,7 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
                     status === "online"
                       ? "bg-success"
                       : status === "checking"
-                        ? "bg-warning"
+                        ? "bg-info"
                         : "bg-destructive"
                   }`}
                 />

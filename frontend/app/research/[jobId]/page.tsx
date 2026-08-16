@@ -161,7 +161,7 @@ export default function ResearchWorkspace() {
           {(stream.status === "queued" || stream.status === "running") && (
             <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground">
               <Clock size={11} />
-              {formatTime(elapsed)}
+              ELAPSED {formatTime(elapsed)}
             </span>
           )}
         </div>
@@ -169,7 +169,7 @@ export default function ResearchWorkspace() {
         {!job.notFound && (
         <span
           className={`inline-flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider select-none
-            ${stream.connection === "open" ? "text-success" : stream.connection === "reconnecting" ? "text-warning" : "text-muted-foreground"}`}
+            ${stream.connection === "open" ? "text-success" : stream.connection === "reconnecting" ? "text-info" : "text-muted-foreground"}`}
           title="SSE connection state"
         >
           {stream.connection === "open" ? (
@@ -214,8 +214,11 @@ export default function ResearchWorkspace() {
         <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0">
           {/* Primary column */}
           <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
-            <div className="space-y-3">
-              <h1 className="text-lg md:text-xl font-bold tracking-tight text-foreground leading-relaxed">
+            <div className="space-y-2">
+              <p className="text-[10px] font-mono font-bold uppercase tracking-widest text-muted-foreground select-none">
+                Research Query
+              </p>
+              <h1 className="text-lg md:text-xl font-bold font-syne tracking-tight text-foreground leading-relaxed">
                 “{job.result?.query || lastQuery || "Research inquiry"}”
               </h1>
             </div>
@@ -285,7 +288,7 @@ export default function ResearchWorkspace() {
 
             {/* FAILED */}
             {stream.status === "failed" && (
-              <div className="bg-card border border-destructive/20 bg-destructive/5 rounded-xl p-8 text-center space-y-4 max-w-xl mx-auto my-12">
+              <div className="border border-destructive/20 bg-destructive/5 rounded-xl p-8 text-center space-y-4 max-w-xl mx-auto my-12">
                 <div className="h-12 w-12 rounded-full bg-destructive/10 border border-destructive/30 flex items-center justify-center text-destructive mx-auto">
                   <Info size={24} />
                 </div>
@@ -295,17 +298,21 @@ export default function ResearchWorkspace() {
                 <p className="text-xs text-muted-foreground leading-relaxed max-w-md mx-auto">
                   {stream.error || job.error || "The research job failed."}
                 </p>
+                <p className="text-[10px] font-mono text-muted-foreground max-w-md mx-auto">
+                  You can retry the pipeline with the same query, or start a
+                  new inquiry.
+                </p>
                 {retryError && (
                   <p className="text-xs text-destructive">{retryError}</p>
                 )}
-                <div className="pt-2 flex justify-center gap-3">
+                <div className="pt-2 flex justify-center gap-3 flex-wrap">
                   <button
                     type="button"
                     onClick={retry}
                     disabled={retrying}
                     className="flex items-center gap-1.5 px-4 py-2 bg-primary text-primary-foreground font-semibold text-xs rounded-lg hover:bg-primary/95 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                   >
-                    <RefreshCw size={13} className={retrying ? "animate-spin" : ""} />
+                    <RefreshCw size={13} className={retrying ? "animate-spin motion-reduce:animate-none" : ""} />
                     <span>{retrying ? "Submitting…" : "Retry Pipeline"}</span>
                   </button>
                   <button

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { ExternalLink } from "lucide-react";
 import type { Evidence, Citation, FactCheck } from "@/lib/types/api";
 import { getDomain } from "@/lib/utils/url";
@@ -56,6 +56,35 @@ export default function TraceabilityRail({
     }
   };
 
+  // WAI-ARIA tabs pattern: arrow keys + Home/End move focus and selection.
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const onTablistKeyDown = (e: React.KeyboardEvent) => {
+    const idx = TABS.findIndex((t) => t.key === activeTab);
+    let next = idx;
+    if (e.key === "ArrowRight") next = (idx + 1) % TABS.length;
+    else if (e.key === "ArrowLeft") next = (idx - 1 + TABS.length) % TABS.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = TABS.length - 1;
+    else return;
+    e.preventDefault();
+    const target = TABS[next];
+    setTab(target.key);
+    tabRefs.current[next]?.focus();
+  };
+
+  const tabCount = (key: RailTab) => {
+    switch (key) {
+      case "sources":
+        return sources.length;
+      case "evidence":
+        return evidence.length;
+      case "citations":
+        return citations.length;
+      case "claims":
+        return factChecks.length;
+    }
+  };
+
   return (
     <aside className="w-full lg:w-96 border-t lg:border-t-0 lg:border-l border-border bg-sidebar flex flex-col min-w-0 h-[28rem] lg:h-auto overflow-hidden">
       {/* Tab bar */}
@@ -63,26 +92,48 @@ export default function TraceabilityRail({
         className="flex border-b border-border bg-background/30 overflow-x-auto shrink-0 select-none"
         role="tablist"
         aria-label="Traceability panels"
+        onKeyDown={onTablistKeyDown}
       >
-        {TABS.map((tab) => (
-          <button
-            key={tab.key}
-            role="tab"
-            aria-selected={activeTab === tab.key}
-            onClick={() => setTab(tab.key)}
-            className={`flex-1 min-w-[72px] py-3.5 px-2 text-center text-[10px] font-mono font-bold uppercase tracking-wider border-b-2 cursor-pointer transition-all
-              ${activeTab === tab.key
-                ? "border-primary text-primary bg-card"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+        {TABS.map((tab, i) => {
+          const count = tabCount(tab.key);
+          return (
+            <button
+              key={tab.key}
+              ref={(el) => {
+                tabRefs.current[i] = el;
+              }}
+              role="tab"
+              id={`rail-tab-${tab.key}`}
+              aria-selected={activeTab === tab.key}
+              aria-controls="rail-panel"
+              tabIndex={activeTab === tab.key ? 0 : -1}
+              onClick={() => setTab(tab.key)}
+              className={`flex-1 min-w-[72px] py-3.5 px-2 text-center text-[10px] font-mono font-bold uppercase tracking-wider border-b-2 cursor-pointer transition-all
+                ${activeTab === tab.key
+                  ? "border-primary text-primary bg-card"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+            >
+              {tab.label}
+              {count > 0 && (
+                <span
+                  className={`ml-1 text-[9px] ${activeTab === tab.key ? "text-primary/70" : "text-muted-foreground/70"}`}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Active panel */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4" role="tabpanel">
+      <div
+        className="flex-1 overflow-y-auto p-4 space-y-4"
+        role="tabpanel"
+        id="rail-panel"
+        aria-labelledby={`rail-tab-${activeTab}`}
+      >
         {activeTab === "sources" && (
           <div className="space-y-2">
             {sources.length === 0 ? (

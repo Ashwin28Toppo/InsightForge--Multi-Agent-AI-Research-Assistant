@@ -147,3 +147,24 @@ body {
 .active-pulse {
   animation: stage-pulse 1.5s infinite ease-in-out;
 }
+
+/* Accessibility: consistent, visible keyboard focus for every interactive
+   element. Utility classes (e.g. outline-hidden on custom-focus inputs) still
+   override this via normal specificity, so focused containers keep their own
+   ring treatment. */
+:where(a, button, input, select, textarea, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Reduced motion: disable the decorative pulse/spin/ping animations so the
+   interface stays calm and non-distracting for users who prefer it. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-border-pulse,
+  .active-pulse,
+  .animate-ping,
+  .animate-pulse,
+  .animate-spin {
+    animation: none !important;
+  }
+}

@@ -107,7 +107,8 @@ export default function ReportViewer({
           meta?.citationCount != null ||
           meta?.claimCount != null ||
           meta?.factCheckCount != null ||
-          meta?.criticScore != null) && (
+          meta?.criticScore != null ||
+          meta?.completedAt) && (
           <div className="flex flex-wrap gap-x-5 gap-y-1 mt-4 pt-3 border-t border-border text-[10px] font-mono text-muted-foreground">
             {query && (
               <span className="truncate max-w-full">
@@ -119,13 +120,17 @@ export default function ReportViewer({
             {meta?.claimCount != null && <span>{meta.claimCount} claims</span>}
             {meta?.factCheckCount != null && <span>{meta.factCheckCount} fact checks</span>}
             {meta?.criticScore != null && <span>Critic: {meta.criticScore}/10</span>}
+            {meta?.completedAt && <span>Completed: {meta.completedAt}</span>}
           </div>
         )}
       </div>
 
-      {/* Reading surface — typography, not nested cards */}
+      {/* Reading surface — typography, not nested cards. Constrained to a
+          comfortable measure so lines stay readable on wide screens. */}
       <div className="px-6 md:px-10 py-8">
-        <MarkdownRenderer markdown={report} onCitationRef={onCitationRef} />
+        <div className="max-w-[72ch]">
+          <MarkdownRenderer markdown={report} onCitationRef={onCitationRef} />
+        </div>
       </div>
     </div>
   );
