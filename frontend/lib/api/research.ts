@@ -9,22 +9,35 @@ import {
 } from "../types/api";
 
 /** Start a research job. Returns the created job id (HTTP 202). */
-export function submitResearch(query: string): Promise<ResearchJobResponse> {
+export function submitResearch(
+  query: string,
+  signal?: AbortSignal
+): Promise<ResearchJobResponse> {
   const body: ResearchRequest = { query };
   return apiFetch<ResearchJobResponse>("/research", {
     method: "POST",
     body: JSON.stringify(body),
+    signal,
   });
 }
 
 /** Get the current status/result of a research job (404 if unknown/expired). */
-export function getJobStatus(jobId: string): Promise<ResearchStatusResponse> {
-  return apiFetch<ResearchStatusResponse>(`/research/${encodeURIComponent(jobId)}`);
+export function getJobStatus(
+  jobId: string,
+  signal?: AbortSignal
+): Promise<ResearchStatusResponse> {
+  return apiFetch<ResearchStatusResponse>(`/research/${encodeURIComponent(jobId)}`, {
+    signal,
+  });
 }
 
 /** Get the live progress snapshot of a research job. */
-export function getJobProgress(jobId: string): Promise<ResearchProgressResponse> {
+export function getJobProgress(
+  jobId: string,
+  signal?: AbortSignal
+): Promise<ResearchProgressResponse> {
   return apiFetch<ResearchProgressResponse>(
-    `/research/${encodeURIComponent(jobId)}/progress`
+    `/research/${encodeURIComponent(jobId)}/progress`,
+    { signal }
   );
 }

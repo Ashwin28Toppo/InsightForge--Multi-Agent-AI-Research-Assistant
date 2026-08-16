@@ -3,6 +3,6 @@
 import { apiFetch } from "./client";
 import type { HealthResponse } from "../types/api";
 
-export function getHealth(): Promise<HealthResponse> {
-  return apiFetch<HealthResponse>("/health");
+export function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
+  return apiFetch<HealthResponse>("/health", { signal });
 }

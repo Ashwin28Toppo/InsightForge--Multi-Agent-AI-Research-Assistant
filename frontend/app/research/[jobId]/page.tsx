@@ -254,13 +254,9 @@ export default function ResearchWorkspace() {
 
             {/* COMPLETED */}
             {stream.status === "completed" &&
-              (job.loading && !job.result ? (
-                <div className="bg-card border border-border rounded-xl p-6 space-y-6">
-                  <Skeleton lines={4} />
-                </div>
-              ) : job.result ? (
+              (job.result && job.result.report ? (
                 <ReportViewer
-                  report={job.result.report || ""}
+                  report={job.result.report}
                   confidence={job.result.confidence}
                   meta={{
                     elapsed: formatTime(elapsed),
@@ -272,6 +268,10 @@ export default function ResearchWorkspace() {
                   }}
                   onCitationRef={handleCitationRef}
                 />
+              ) : job.loading ? (
+                <div className="bg-card border border-border rounded-xl p-6 space-y-6">
+                  <Skeleton lines={4} />
+                </div>
               ) : (
                 <div className="bg-card border border-border rounded-xl p-8 text-center space-y-3">
                   <p className="text-sm font-semibold text-foreground">

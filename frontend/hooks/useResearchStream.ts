@@ -33,6 +33,8 @@ export function useResearchStream(jobId: string | null) {
   useEffect(() => {
     if (!jobId) return;
     const id = jobId;
+    const controller = new AbortController();
+    const signal = controller.signal;
     let cancelled = false;
     let terminal = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -62,11 +64,13 @@ export function useResearchStream(jobId: string | null) {
         if (cancelled || terminal) return;
         if (connectionRef.current === "open") return; // SSE healthy — don't hammer
         try {
-          const p = await getJobProgress(id);
-          if (cancelled) return;
+          const p = await getJobProgress(id, signal);
+          if (cancelled || signal.aborted) return;
           applyProgress(p);
           if (terminal) stopPolling();
         } catch (err) {
+          // Aborted by unmount/navigation — not a real error.
+          if (signal.aborted) return;
           // 404 = job unknown/expired: stop polling and close the stream.
           if ((err as { status?: number }).status === 404 && !terminal) {
             terminal = true;
@@ -124,9 +128,9 @@ export function useResearchStream(jobId: string | null) {
 
     // Initial progress snapshot (fast seed + covers SSE-never-connecting).
     startPolling();
-    getJobProgress(id)
+    getJobProgress(id, signal)
       .then((p) => {
-        if (cancelled) return;
+        if (cancelled || signal.aborted) return;
         applyProgress(p);
       })
       .catch(() => {
@@ -135,6 +139,7 @@ export function useResearchStream(jobId: string | null) {
 
     return () => {
       cancelled = true;
+      controller.abort();
       stopPolling();
       unsubscribe();
     };

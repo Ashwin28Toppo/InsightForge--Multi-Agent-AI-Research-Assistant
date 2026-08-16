@@ -36,7 +36,13 @@ const STATUS_CONFIG: Record<
 };
 
 export default function StatusBadge({ status, className = "" }: StatusBadgeProps) {
-  const config = STATUS_CONFIG[status];
+  // Defensive: a malformed/unknown status falls back to a neutral badge so
+  // stale or corrupt history records can never crash the UI.
+  const config = STATUS_CONFIG[status] ?? {
+    label: "Unknown",
+    icon: <Clock size={11} />,
+    classes: "border-border-strong bg-muted text-muted-foreground",
+  };
   return (
     <span
       className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[10px] font-mono font-bold uppercase tracking-wide select-none ${config.classes} ${className}`}
