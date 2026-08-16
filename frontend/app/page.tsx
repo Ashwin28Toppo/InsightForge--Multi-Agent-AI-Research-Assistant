@@ -7,7 +7,7 @@ import ResearchComposer from "@/components/research/ResearchComposer";
 import { submitResearch } from "@/lib/api/research";
 import { apiErrorMessage } from "@/lib/utils/errors";
 import { getHistory } from "@/lib/history/store";
-import { PIPELINE_STAGES } from "@/lib/mock/research";
+import { PIPELINE_STAGES } from "@/lib/constants/pipeline";
 import { ArrowRight, Clock } from "lucide-react";
 import ConfidenceBadge from "@/components/ui/ConfidenceBadge";
 

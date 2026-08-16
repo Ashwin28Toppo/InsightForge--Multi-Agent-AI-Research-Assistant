@@ -6,8 +6,8 @@ Next.js (App Router) + TypeScript + Tailwind CSS v4.
 > **Status: real FastAPI integration.** The frontend talks to the FastAPI
 > backend over HTTP (`POST /research`, status, progress) and Server-Sent
 > Events (`/research/{job_id}/stream`) with reconnection + a polling fallback.
-> Completed research is archived to localStorage. Mock data in `lib/mock`
-> remains available but is **not** used by the default app paths.
+> Completed research is archived to localStorage. Pipeline stage labels live in
+> `lib/constants/pipeline.ts`; there is no mock data module.
 
 ## Getting started
 
@@ -33,7 +33,7 @@ Next.js (App Router) + TypeScript + Tailwind CSS v4.
 |---|---|
 | `/` | Landing — composer, pipeline overview, recent inquiries |
 | `/research/[jobId]` | Research workspace — live progress / report / failed states |
-| `/history` | Research history (localStorage, mock-seeded) |
+| `/history` | Research history (localStorage) |
 | `/history/[jobId]` | Archived snapshot detail |
 
 ## Structure
@@ -52,10 +52,10 @@ components/
   history/              # HistoryItem
   research/             # ResearchComposer
 lib/
-  api/                  # fetch wrapper + typed API functions (mock stubs now)
-  sse/                  # isolated SSE client (mock now)
+  api/                  # fetch wrapper + typed API functions
+  sse/                  # isolated SSE client (EventSource + backoff)
   types/api.ts          # API + SSE TypeScript contracts (mirror backend)
-  mock/research.ts      # realistic mock research data + runMockResearch
+  constants/pipeline.ts # static pipeline stage labels/descriptions
   history/store.ts      # localStorage history
   utils/url.ts          # domain extraction
 hooks/                  # useHealth, useResearchJob, useResearchStream

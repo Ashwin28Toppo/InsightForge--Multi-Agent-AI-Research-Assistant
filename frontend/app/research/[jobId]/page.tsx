@@ -13,7 +13,7 @@ import { useResearchJob } from "@/hooks/useResearchJob";
 import { submitResearch } from "@/lib/api/research";
 import { apiErrorMessage } from "@/lib/utils/errors";
 import { saveHistoryItem } from "@/lib/history/store";
-import { PIPELINE_STAGES } from "@/lib/mock/research";
+import { PIPELINE_STAGES } from "@/lib/constants/pipeline";
 import {
   Clock,
   Info,
