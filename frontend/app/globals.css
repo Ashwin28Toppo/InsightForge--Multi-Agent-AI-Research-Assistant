@@ -1,0 +1,149 @@
+@import "tailwindcss";
+
+:root {
+  /* Graphite / Charcoal core palette */
+  --background: #090a0f;
+  --foreground: #f1f5f9;
+  
+  /* Surfaces and Cards */
+  --card: #11131c;
+  --card-foreground: #f1f5f9;
+  --popover: #11131c;
+  --popover-foreground: #f1f5f9;
+  
+  /* Primary Accent: Indigo & Secondary: Muted Blue/Cyan */
+  --primary: #6366f1;
+  --primary-foreground: #ffffff;
+  --secondary: #1e293b;
+  --secondary-foreground: #f1f5f9;
+  
+  /* Muted Text / Accents */
+  --muted: #161822;
+  --muted-foreground: #94a3b8;
+  --accent: #1e293b;
+  --accent-foreground: #f1f5f9;
+  
+  /* Utility states */
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --success: #10b981;
+  --success-foreground: #ffffff;
+  --warning: #f59e0b;
+  --warning-foreground: #090a0f;
+  --info: #06b6d4;
+  --info-foreground: #ffffff;
+  
+  /* Borders and Interactive */
+  --border: #1e2330;
+  --border-strong: #2e3448;
+  --input: #11131c;
+  --ring: #6366f1;
+  --radius: 12px;
+
+  /* Sidebar styling */
+  --sidebar: #07080c;
+  --sidebar-border: #141722;
+}
+
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-border: var(--sidebar-border);
+  
+  /* Custom Fonts */
+  --font-syne: var(--font-syne), sans-serif;
+  --font-sans: var(--font-dm-sans), sans-serif;
+  --font-mono: var(--font-dm-mono), monospace;
+}
+
+/* Global resets & customizations */
+html, body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  min-height: 100%;
+}
+
+body {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 20% -10%, rgba(99, 102, 241, 0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 110%, rgba(6, 182, 212, 0.05) 0%, transparent 55%);
+  background-attachment: fixed;
+}
+
+/* Custom Scrollbar for Workstation density */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--background);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+/* Custom animated gradient border for active runs */
+@keyframes border-pulse {
+  0%, 100% {
+    border-color: var(--border);
+  }
+  50% {
+    border-color: var(--primary);
+  }
+}
+
+.animate-border-pulse {
+  animation: border-pulse 2s infinite ease-in-out;
+}
+
+/* Pulse animation for active running step */
+@keyframes stage-pulse {
+  0%, 100% {
+    opacity: 0.4;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
+.active-pulse {
+  animation: stage-pulse 1.5s infinite ease-in-out;
+}
