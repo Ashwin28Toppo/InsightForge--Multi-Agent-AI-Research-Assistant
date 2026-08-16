@@ -1367,3 +1367,58 @@ def test_contract_progress_schema(monkeypatch):
     assert set(body) == {"job_id", "status", "current_step", "completed_steps"}
     assert body["current_step"] is None
     assert body["completed_steps"] == []
+
+
+# ── Frontend integration-readiness (Phase 2D Step 11 audit) ─────────────────
+
+
+def test_openapi_stream_description_documents_sse_contract():
+    """The SSE contract a frontend needs must be discoverable in OpenAPI."""
+    spec = _openapi()
+    description = spec["paths"]["/research/{job_id}/stream"]["get"]["description"]
+    for event in ("queued", "progress", "completed", "failed"):
+        assert event in description
+    # Result is fetched via the status endpoint, not duplicated in SSE.
+    assert "GET /research/{job_id}" in description
+    assert "error" in description
+    assert "state snapshot" in description
+
+
+def test_frontend_flow_submit_sse_then_fetch_result(monkeypatch):
+    """The full flow a Next.js client performs: submit -> SSE -> fetch result.
+
+    Verifies the SSE terminal event and the status endpoint agree on the same
+    ``job_id``, the SSE event carries no result (no duplication), and the
+    final report is retrievable afterwards.
+    """
+    async def fake_streaming(query, on_step=None):
+        for step in ALL_STAGES:
+            if on_step:
+                on_step(step)
+        return dict(REPRESENTATIVE_RESULT)
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_streaming)
+
+    # 1. Submit the query and receive a job_id.
+    submission = client.post("/research", json={"query": "frontend flow"})
+    assert submission.status_code == 202
+    job_id = submission.json()["job_id"]
+
+    # 2. Subscribe to SSE: exactly one terminal 'completed' event, no result.
+    with client.stream("GET", f"/research/{job_id}/stream") as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        lines = [line for line in response.iter_lines() if line]
+
+    assert "event: completed" in lines
+    payload = _parse_sse_data("\n".join(lines))
+    assert payload["job_id"] == job_id
+    assert payload["status"] == "completed"
+    assert set(payload) == {"job_id", "status", "current_step", "completed_steps"}
+    assert "result" not in payload  # no result duplication in SSE
+
+    # 3. Fetch the final report via the status endpoint.
+    body = client.get(f"/research/{job_id}").json()
+    assert body["job_id"] == job_id
+    assert body["status"] == "completed"
+    assert body["result"]["report"] == "Final research report"

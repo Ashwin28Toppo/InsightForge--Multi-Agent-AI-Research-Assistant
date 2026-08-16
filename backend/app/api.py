@@ -375,7 +375,11 @@ def health() -> HealthResponse:
         "Creates a research job and returns immediately with its ``job_id``. "
         "The pipeline runs asynchronously in the background; poll "
         "``GET /research/{job_id}`` for the outcome or follow "
-        "``GET /research/{job_id}/stream`` for live Server-Sent Events."
+        "``GET /research/{job_id}/stream`` for live Server-Sent Events.\n\n"
+        "Each call creates a distinct job — the API has no idempotency key, "
+        "so clients should guard against duplicate submissions (e.g. disable "
+        "the submit action while one is in flight) and use the returned "
+        "``job_id`` for all follow-up calls."
     ),
     responses={
         202: {"description": "Job accepted; ``job_id`` returned."},
@@ -562,10 +566,25 @@ async def _job_event_stream(job_id: str) -> AsyncIterator[str]:
     response_class=StreamingResponse,
     summary="Stream job progress (Server-Sent Events)",
     description=(
-        "Streams Server-Sent Events as a job's state changes: ``queued``, "
-        "``progress``, then a terminal ``completed`` or ``failed`` event. The "
-        "stream only observes the existing job state — it never runs the "
-        "research pipeline. Unknown or expired jobs return ``404``."
+        "Streams Server-Sent Events as a job's state changes. Each event is "
+        "``event: <name>`` followed by a JSON ``data`` block, terminated by a "
+        "blank line. On (re)connect the current state is replayed, so the "
+        "first event may be ``queued``, ``progress`` or a terminal event — "
+        "treat every event as a state snapshot.\n\n"
+        "Events:\n"
+        "- ``queued`` — job created, worker not yet started.\n"
+        "- ``progress`` — job running; ``data`` carries the live progress.\n"
+        "- ``completed`` — terminal; the stream closes immediately after. "
+        "The full result is NOT included in the event — call "
+        "``GET /research/{job_id}`` to fetch it.\n"
+        "- ``failed`` — terminal; ``data`` additionally includes a safe "
+        "``error`` string; the stream closes immediately after.\n\n"
+        "Every ``data`` payload shares the shape of "
+        "``GET /research/{job_id}/progress``: ``job_id``, ``status``, "
+        "``current_step`` and ``completed_steps`` (``failed`` also adds "
+        "``error``). The stream only observes the existing job state — it "
+        "never runs the research pipeline. Unknown or expired jobs return "
+        "``404``."
     ),
     responses={
         200: {
