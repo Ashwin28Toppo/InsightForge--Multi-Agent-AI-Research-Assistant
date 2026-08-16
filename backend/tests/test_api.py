@@ -273,8 +273,7 @@ def test_get_queued_job(monkeypatch):
 
 def test_get_running_job(monkeypatch):
     def mark_running(job_id, query):
-        with api._lock:
-            api._jobs[job_id]["status"] = "running"
+        api.store.mark_running(job_id)
 
     monkeypatch.setattr(api, "_run_job", mark_running)
 
@@ -351,12 +350,14 @@ def test_progress_queued_job(monkeypatch):
 
 def test_progress_running_job_exposes_current_step(monkeypatch):
     def mark_running(job_id, query):
-        with api._lock:
-            api._jobs[job_id]["status"] = "running"
-            api._jobs[job_id]["current_step"] = "fact_check"
-            api._jobs[job_id]["completed_steps"] = [
+        api.store.update(
+            job_id,
+            status="running",
+            current_step="fact_check",
+            completed_steps=[
                 "plan", "research", "evidence", "claim_extraction",
-            ]
+            ],
+        )
 
     monkeypatch.setattr(api, "_run_job", mark_running)
 
@@ -450,28 +451,25 @@ ALL_STAGES = [
 
 
 def _seed_job(status="queued", current_step=None, completed_steps=None, error=None):
-    """Insert a job directly into the in-memory store (offline)."""
+    """Insert a job directly through the job store (offline)."""
     job_id = str(uuid.uuid4())
-    now = api._utcnow()
-    with api._lock:
-        api._jobs[job_id] = {
-            "job_id": job_id,
-            "query": "q",
-            "status": status,
-            "result": None,
-            "error": error,
-            "current_step": current_step,
-            "completed_steps": list(completed_steps or []),
-            "created_at": now,
-            "updated_at": now,
-        }
+    api.store.create(
+        job_id=job_id,
+        query="q",
+        status=status,
+        error=error,
+        current_step=current_step,
+        completed_steps=list(completed_steps or []),
+    )
     return job_id
 
 
 def _backdate_job(job_id: str, seconds: int) -> None:
     """Rewind a job's ``updated_at`` so it appears older (for TTL tests)."""
-    with api._lock:
-        api._jobs[job_id]["updated_at"] = api._utcnow() - timedelta(seconds=seconds)
+    api.store.update(
+        job_id,
+        updated_at=api.store.now_fn() - timedelta(seconds=seconds),
+    )
 
 
 def _parse_sse_data(event: str) -> dict:
@@ -574,17 +572,19 @@ def test_stream_event_sequence_and_termination(monkeypatch):
     async def drive():
         gen = api._job_event_stream(job_id)
         events = [await gen.__anext__()]  # queued
-        with api._lock:
-            job = api._jobs[job_id]
-            job["status"] = "running"
-            job["current_step"] = "evidence"
-            job["completed_steps"] = ["plan", "research", "evidence"]
+        api.store.update(
+            job_id,
+            status="running",
+            current_step="evidence",
+            completed_steps=["plan", "research", "evidence"],
+        )
         events.append(await gen.__anext__())  # progress
-        with api._lock:
-            job = api._jobs[job_id]
-            job["status"] = "completed"
-            job["current_step"] = "critic"
-            job["completed_steps"] = list(ALL_STAGES)
+        api.store.update(
+            job_id,
+            status="completed",
+            current_step="critic",
+            completed_steps=list(ALL_STAGES),
+        )
         events.append(await gen.__anext__())  # completed
         with pytest.raises(StopAsyncIteration):
             await gen.__anext__()  # stream terminated after completed
@@ -688,70 +688,66 @@ def test_new_job_contains_timestamps(monkeypatch):
     monkeypatch.setattr(api, "_run_job", lambda job_id, query: None)
     job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
 
-    with api._lock:
-        job = dict(api._jobs[job_id])
+    job = api.store.get(job_id)
 
-    assert isinstance(job["created_at"], datetime)
-    assert isinstance(job["updated_at"], datetime)
-    assert job["created_at"].tzinfo is not None  # timezone-aware UTC
-    assert job["updated_at"] >= job["created_at"]
+    assert isinstance(job.created_at, datetime)
+    assert isinstance(job.updated_at, datetime)
+    assert job.created_at.tzinfo is not None  # timezone-aware UTC
+    assert job.updated_at >= job.created_at
 
 
 def test_updated_at_tracks_lifecycle_transitions(monkeypatch):
     clock = [datetime(2026, 1, 1, tzinfo=timezone.utc)]
-    monkeypatch.setattr(api, "_utcnow", lambda: clock[0])
+    monkeypatch.setattr(api.store, "now_fn", lambda: clock[0])
     job_id = _seed_job(status="queued")
-    created = api._jobs[job_id]["updated_at"]
+    created = api.store.get(job_id).updated_at
     snapshots = {}
 
     clock[0] += timedelta(seconds=1)  # queued -> running happens here
 
     async def fake_streaming(query, on_step=None):
-        with api._lock:
-            snapshots["running"] = dict(api._jobs[job_id])  # running (T1)
+        snapshots["running"] = api.store.get(job_id)  # running (T1)
         clock[0] += timedelta(seconds=1)  # progress
         if on_step:
             on_step("plan")
-        with api._lock:
-            snapshots["progress"] = dict(api._jobs[job_id])  # progress (T2)
+        snapshots["progress"] = api.store.get(job_id)  # progress (T2)
         clock[0] += timedelta(seconds=1)  # running -> completed
         return dict(REPRESENTATIVE_RESULT)
 
     monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_streaming)
     api._run_job(job_id, "q")
 
-    final = api._jobs[job_id]
-    assert snapshots["running"]["status"] == "running"
-    assert snapshots["running"]["updated_at"] > created  # queued -> running
+    final = api.store.get(job_id)
+    assert snapshots["running"].status == "running"
+    assert snapshots["running"].updated_at > created  # queued -> running
     assert (
-        snapshots["progress"]["updated_at"] > snapshots["running"]["updated_at"]
+        snapshots["progress"].updated_at > snapshots["running"].updated_at
     )  # progress
-    assert final["status"] == "completed"
-    assert final["updated_at"] > snapshots["progress"]["updated_at"]  # -> completed
+    assert final.status == "completed"
+    assert final.updated_at > snapshots["progress"].updated_at  # -> completed
 
 
 def test_updated_at_tracks_failure_transition(monkeypatch):
     clock = [datetime(2026, 1, 1, tzinfo=timezone.utc)]
-    monkeypatch.setattr(api, "_utcnow", lambda: clock[0])
+    monkeypatch.setattr(api.store, "now_fn", lambda: clock[0])
     job_id = _seed_job(status="queued")
-    created = api._jobs[job_id]["updated_at"]
+    created = api.store.get(job_id).updated_at
     snapshots = {}
 
     clock[0] += timedelta(seconds=1)
 
     async def failing_streaming(query, on_step=None):
-        with api._lock:
-            snapshots["running"] = dict(api._jobs[job_id])  # running (T1)
+        snapshots["running"] = api.store.get(job_id)  # running (T1)
         clock[0] += timedelta(seconds=1)  # running -> failed
         raise RuntimeError("boom")
 
     monkeypatch.setattr(api, "arun_research_pipeline_streaming", failing_streaming)
     api._run_job(job_id, "q")
 
-    final = api._jobs[job_id]
-    assert final["status"] == "failed"
-    assert snapshots["running"]["updated_at"] > created  # queued -> running
-    assert final["updated_at"] > snapshots["running"]["updated_at"]  # -> failed
+    final = api.store.get(job_id)
+    assert final.status == "failed"
+    assert snapshots["running"].updated_at > created  # queued -> running
+    assert final.updated_at > snapshots["running"].updated_at  # -> failed
 
 
 def test_cleanup_removes_expired_completed():
@@ -760,8 +756,7 @@ def test_cleanup_removes_expired_completed():
 
     api._cleanup_expired_jobs()
 
-    with api._lock:
-        assert job_id not in api._jobs
+    assert api.store.get(job_id) is None
 
 
 def test_cleanup_removes_expired_failed():
@@ -770,8 +765,7 @@ def test_cleanup_removes_expired_failed():
 
     api._cleanup_expired_jobs()
 
-    with api._lock:
-        assert job_id not in api._jobs
+    assert api.store.get(job_id) is None
 
 
 def test_cleanup_keeps_queued_even_if_old():
@@ -780,8 +774,7 @@ def test_cleanup_keeps_queued_even_if_old():
 
     api._cleanup_expired_jobs()
 
-    with api._lock:
-        assert job_id in api._jobs
+    assert api.store.get(job_id) is not None
 
 
 def test_cleanup_keeps_running_even_if_old():
@@ -790,8 +783,7 @@ def test_cleanup_keeps_running_even_if_old():
 
     api._cleanup_expired_jobs()
 
-    with api._lock:
-        assert job_id in api._jobs
+    assert api.store.get(job_id) is not None
 
 
 def test_cleanup_keeps_fresh_completed_and_failed():
@@ -802,9 +794,8 @@ def test_cleanup_keeps_fresh_completed_and_failed():
 
     api._cleanup_expired_jobs()
 
-    with api._lock:
-        assert fresh_completed in api._jobs
-        assert fresh_failed in api._jobs
+    assert api.store.get(fresh_completed) is not None
+    assert api.store.get(fresh_failed) is not None
 
 
 def test_expired_job_status_returns_404():
@@ -851,8 +842,7 @@ def test_cleanup_does_not_execute_pipeline(monkeypatch):
     api._cleanup_expired_jobs()
 
     assert pipeline_calls == []
-    with api._lock:
-        assert job_id not in api._jobs
+    assert api.store.get(job_id) is None
 
 
 def test_cleanup_is_safe_with_the_lock():
@@ -879,11 +869,10 @@ def test_cleanup_is_safe_with_the_lock():
         t.join()
 
     assert errors == []
-    with api._lock:
-        for job_id in completed_ids:
-            assert job_id not in api._jobs
-        for job_id in active_ids:
-            assert job_id in api._jobs
+    for job_id in completed_ids:
+        assert api.store.get(job_id) is None
+    for job_id in active_ids:
+        assert api.store.get(job_id) is not None
 
 
 # ── CORS (Phase 2D Step 7) ───────────────────────────────────────────────────

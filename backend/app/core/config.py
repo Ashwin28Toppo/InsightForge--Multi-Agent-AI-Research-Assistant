@@ -101,6 +101,14 @@ class Settings(BaseSettings):
     # are cleaned up from the in-memory store.
     job_ttl_seconds: int = 3600
 
+    # ── Database (Phase 2F Step 2) ────────────────────────────────────────
+    # Optional for now: the application still runs fully in-memory when unset,
+    # and importing/starting the API never opens a database connection. Once
+    # set, this is the async PostgreSQL URL used by the ORM/session layer and
+    # by Alembic migrations. Expected format:
+    #   postgresql+asyncpg://user:password@host:5432/insightforge
+    database_url: str | None = None
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_cors_origins(cls, value: object) -> object:

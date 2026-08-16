@@ -21,9 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import threading
 import time
-from datetime import datetime, timezone
 from typing import AsyncIterator, Literal
 from uuid import uuid4
 
@@ -35,6 +33,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend.app.core.config import settings
 from backend.app.main import arun_research_pipeline_streaming
+from backend.app.repositories.jobs import (
+    InMemoryJobStore,
+    JobRecord,
+    JobStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -174,40 +177,27 @@ app.add_middleware(
 )
 
 
-# ── In-memory job store (by design; jobs are lost on restart) ────────────────
+# ── Job store (Phase 2F Step 2) ─────────────────────────────────────────────
+# The API interacts ONLY with the JobStore abstraction — never a raw dict. The
+# current implementation is in-memory by design (jobs are lost on restart); a
+# PostgreSQL-backed store will be introduced in a later phase behind the same
+# interface, without changing the HTTP/SSE contract.
 
-_jobs: dict[str, dict] = {}
-_lock = threading.Lock()
+store: JobStore = InMemoryJobStore()
 
 # How often the SSE stream polls the job store for changes — keeps the stream
 # responsive without busy-spinning the CPU.
 _POLL_INTERVAL_SECONDS = 0.5
 
 
-def _utcnow() -> datetime:
-    """Timezone-aware current UTC time."""
-    return datetime.now(timezone.utc)
-
-
 def _cleanup_expired_jobs() -> None:
     """Remove terminal jobs older than ``settings.job_ttl_seconds``.
 
     Only ``completed``/``failed`` jobs are ever deleted; ``queued`` and
-    ``running`` jobs are never touched. Runs under the existing job lock (a
-    single acquisition), is idempotent, and never executes the pipeline.
+    ``running`` jobs are never touched. Delegates to the job store (one atomic
+    sweep), is idempotent, and never executes the pipeline.
     """
-    ttl = settings.job_ttl_seconds
-    now = _utcnow()
-    with _lock:
-        expired = [
-            job_id
-            for job_id, job in _jobs.items()
-            if job.get("status") in ("completed", "failed")
-            and isinstance(job.get("updated_at"), datetime)
-            and (now - job["updated_at"]).total_seconds() > ttl
-        ]
-        for job_id in expired:
-            del _jobs[job_id]
+    store.cleanup_expired(settings.job_ttl_seconds)
 
 
 class ResearchRequest(BaseModel):
@@ -308,25 +298,15 @@ def _run_job(job_id: str, query: str) -> None:
     this worker thread (``asyncio.run``), so the server's event loop is never
     blocked by the long-running research. Each completed logical stage is
     recorded on the job (``current_step`` + ``completed_steps``) through the
-    ``on_step`` callback. Exceptions are never swallowed silently — they are
-    logged and surfaced on the job record as a safe error string.
+    ``on_step`` callback, which delegates to the job store. If the job has
+    already been removed, the store operations no-op safely. Exceptions are
+    never swallowed silently — they are logged and surfaced on the job record
+    as a safe error string.
     """
-    with _lock:
-        job = _jobs.get(job_id)
-        if job is not None:
-            job["status"] = "running"
-            job["current_step"] = None
-            job["completed_steps"] = []
-            job["updated_at"] = _utcnow()
+    store.mark_running(job_id)
 
     def on_step(step: str) -> None:
-        with _lock:
-            current = _jobs.get(job_id)
-            if current is None:
-                return
-            current["current_step"] = step
-            current["completed_steps"] = list(current["completed_steps"]) + [step]
-            current["updated_at"] = _utcnow()
+        store.append_step(job_id, step)
 
     try:
         result = asyncio.run(
@@ -334,18 +314,10 @@ def _run_job(job_id: str, query: str) -> None:
         )
     except Exception as exc:
         logger.exception("research job %s failed", job_id)
-        with _lock:
-            if job is not None:
-                job["status"] = "failed"
-                job["error"] = f"{type(exc).__name__}: {exc}"
-                job["updated_at"] = _utcnow()
+        store.mark_failed(job_id, f"{type(exc).__name__}: {exc}")
         return
 
-    with _lock:
-        if job is not None:
-            job["status"] = "completed"
-            job["result"] = result
-            job["updated_at"] = _utcnow()
+    store.mark_completed(job_id, result)
 
 
 @app.get(
@@ -402,19 +374,7 @@ def research(
     _cleanup_expired_jobs()
     job_id = str(uuid4())
     request.state.job_id = job_id
-    now = _utcnow()
-    with _lock:
-        _jobs[job_id] = {
-            "job_id": job_id,
-            "query": payload.query,
-            "status": "queued",
-            "result": None,
-            "error": None,
-            "current_step": None,
-            "completed_steps": [],
-            "created_at": now,
-            "updated_at": now,
-        }
+    store.create(job_id=job_id, query=payload.query)
     background_tasks.add_task(_run_job, job_id, payload.query)
     return ResearchJobResponse(job_id=job_id, status="queued")
 
@@ -440,16 +400,15 @@ def research(
 def research_status(job_id: str) -> ResearchStatusResponse:
     """Return the current status/result of a research job (404 if unknown)."""
     _cleanup_expired_jobs()
-    with _lock:
-        job = _jobs.get(job_id)
+    job = store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
-    payload: dict = {"job_id": job["job_id"], "status": job["status"]}
-    if job["status"] == "completed":
-        payload["result"] = job["result"]
-    elif job["status"] == "failed":
-        payload["error"] = job["error"]
+    payload: dict = {"job_id": job.job_id, "status": job.status}
+    if job.status == "completed":
+        payload["result"] = job.result
+    elif job.status == "failed":
+        payload["error"] = job.error
     return ResearchStatusResponse(**payload)
 
 
@@ -476,15 +435,14 @@ def research_progress(job_id: str) -> ResearchProgressResponse:
     when the conditional research loop re-runs research).
     """
     _cleanup_expired_jobs()
-    with _lock:
-        job = _jobs.get(job_id)
+    job = store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return ResearchProgressResponse(
-        job_id=job["job_id"],
-        status=job["status"],
-        current_step=job.get("current_step"),
-        completed_steps=list(job.get("completed_steps") or []),
+        job_id=job.job_id,
+        status=job.status,
+        current_step=job.current_step,
+        completed_steps=list(job.completed_steps or []),
     )
 
 
@@ -496,19 +454,19 @@ def _format_sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-def _progress_payload(job: dict) -> dict:
+def _progress_payload(job: JobRecord) -> dict:
     """The progress payload shared by all SSE events."""
     return {
-        "job_id": job["job_id"],
-        "status": job["status"],
-        "current_step": job.get("current_step"),
-        "completed_steps": list(job.get("completed_steps") or []),
+        "job_id": job.job_id,
+        "status": job.status,
+        "current_step": job.current_step,
+        "completed_steps": list(job.completed_steps or []),
     }
 
 
-def _sse_event_for(job: dict) -> str | None:
+def _sse_event_for(job: JobRecord) -> str | None:
     """Map a job's current state to an SSE event string (None if unknown)."""
-    status = job["status"]
+    status = job.status
     payload = _progress_payload(job)
     if status == "queued":
         return _format_sse("queued", payload)
@@ -518,7 +476,7 @@ def _sse_event_for(job: dict) -> str | None:
         return _format_sse("completed", payload)
     if status == "failed":
         # Only the safe error string — never stack traces or internals.
-        payload["error"] = job.get("error")
+        payload["error"] = job.error
         return _format_sse("failed", payload)
     return None
 
@@ -527,7 +485,7 @@ async def _job_event_stream(job_id: str) -> AsyncIterator[str]:
     """Observe a job and yield SSE events as its state changes.
 
     This generator NEVER executes the research pipeline — it only reads the
-    in-memory job store (under the job lock) and emits ``queued`` /
+    job store (one atomic snapshot per poll) and emits ``queued`` /
     ``progress`` / ``completed`` / ``failed`` events. The terminal check is
     performed on a fresh poll at the top of every loop, so a job that reaches
     ``completed``/``failed`` while an event is being sent is still reported
@@ -536,22 +494,21 @@ async def _job_event_stream(job_id: str) -> AsyncIterator[str]:
     """
     last_signature: tuple | None = None
     while True:
-        with _lock:
-            job = _jobs.get(job_id)
+        job = store.get(job_id)
         if job is None:
             return
 
         # Terminal state: emit the final event once, then stop.
-        if job["status"] in ("completed", "failed"):
+        if job.status in ("completed", "failed"):
             event = _sse_event_for(job)
             if event is not None:
                 yield event
             return
 
         signature = (
-            job["status"],
-            job.get("current_step"),
-            tuple(job.get("completed_steps") or []),
+            job.status,
+            job.current_step,
+            tuple(job.completed_steps or []),
         )
         if signature != last_signature:
             last_signature = signature
@@ -604,8 +561,7 @@ async def research_stream(job_id: str) -> StreamingResponse:
     ``GET /research/{job_id}``.
     """
     _cleanup_expired_jobs()
-    with _lock:
-        job = _jobs.get(job_id)
+    job = store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return StreamingResponse(
