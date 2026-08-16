@@ -284,6 +284,42 @@ arbitrary sequence.
 
 ---
 
+## Docker + PostgreSQL (Phase 2F Steps 11–12)
+
+The production-style local stack is defined in `docker-compose.yml`
+(PostgreSQL, backend, frontend, Qdrant). Secrets come from the environment
+(`.env` + `POSTGRES_*`); PostgreSQL and Qdrant use named volumes.
+
+```bash
+# Build + start the whole stack (PostgreSQL, backend, frontend, Qdrant)
+docker compose up -d --build
+# Backend health: http://localhost:8000/health · Frontend: http://localhost:3000
+```
+
+**Migrations** — apply the existing Alembic migrations to the Compose
+PostgreSQL (idempotent; run once on a fresh volume):
+
+```bash
+docker compose exec backend sh -c "cd /app/backend && alembic upgrade head"
+```
+
+**Backup / restore** (plain SQL via `pg_dump` / `psql`):
+
+```bash
+scripts/backup-postgres.sh                 # -> backup/insightforge-<ts>.sql
+scripts/restore-postgres.sh backup/insightforge-<ts>.sql   # replaces DB contents
+```
+
+On Windows PowerShell, use `cmd /c` redirection so the dump stays raw bytes
+(PowerShell 5.1's `>`/pipe would re-encode to UTF-16 and corrupt text data):
+
+```powershell
+cmd /c "docker compose exec -T postgres pg_dump -U insightforge -d insightforge > backup.sql"
+cmd /c "docker compose exec -T postgres psql -U insightforge -d insightforge < backup.sql"
+```
+
+---
+
 ## Rules for Future AI Coding Agents
 
 1. **Do not redesign the backend.** It is Phase 2D complete and intentionally

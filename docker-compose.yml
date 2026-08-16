@@ -1,17 +1,36 @@
-# ---- Phase 2F Step 11: InsightForge production-style local stack ----
+# ---- Phase 2F Step 12: InsightForge production-style local stack ----
 #
-# Services: FastAPI backend, Next.js frontend, Qdrant (vector store).
+# Services: PostgreSQL, FastAPI backend, Next.js frontend, Qdrant (vector store).
 # - All services share one internal network; only backend:8000 and
 #   frontend:3000 are published to the host.
-# - Qdrant data is persisted in a named volume and survives restarts.
-# - Secrets (GROQ_API_KEY, TAVILY_KEY_KEY/TAVILY_API_KEY, GOOGLE_API_KEY,
-#   AUTH_JWT_SECRET, ...) come from the repo `.env` file via `env_file` —
-#   never hardcoded here.
-# - The backend reaches PostgreSQL through DATABASE_URL (default: the host's
-#   PostgreSQL via host.docker.internal; override with `DATABASE_URL=...`).
+# - PostgreSQL + Qdrant data are persisted in named volumes and survive
+#   container recreation.
+# - Secrets/credentials come from the environment (Compose interpolates
+#   `${POSTGRES_*}`; API keys via `env_file: .env`) — never hardcoded here.
+# - The backend reaches PostgreSQL through DATABASE_URL (the `postgres`
+#   service on the compose network) and Qdrant through QDRANT_URL.
 name: insightforge
 
 services:
+  postgres:
+    image: postgres:16-alpine # pinned — never `latest`
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-insightforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-insightforge}
+      POSTGRES_DB: ${POSTGRES_DB:-insightforge}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-insightforge} -d ${POSTGRES_DB:-insightforge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "5432" # internal only — the backend talks to it on the network
+    networks:
+      - insightforge-net
+
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
@@ -33,13 +52,16 @@ services:
       # Qdrant runs as a service on the compose network (remote mode); the
       # Step 10 vector-store implementation already supports QDRANT_URL.
       QDRANT_URL: http://qdrant:6333
-      # PostgreSQL is external to this stack; default to the host's instance
-      # (e.g. the local `insightforge-pg` container). Override as needed.
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://insightforge:insightforge@host.docker.internal:5432/insightforge}
+      # PostgreSQL runs as the `postgres` service on the compose network.
+      # Credentials come from the environment (see POSTGRES_* above).
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-insightforge}:${POSTGRES_PASSWORD:-insightforge}@postgres:5432/${POSTGRES_DB:-insightforge}
     ports:
       - "8000:8000" # browser + frontend reach the API here
     depends_on:
-      - qdrant
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
     networks:
       - insightforge-net
 
@@ -63,4 +85,5 @@ networks:
     driver: bridge
 
 volumes:
+  postgres_data:
   qdrant_storage:
