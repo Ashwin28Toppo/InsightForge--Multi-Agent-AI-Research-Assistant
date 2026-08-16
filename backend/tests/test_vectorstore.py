@@ -5,6 +5,7 @@ no Google/Groq/Tavily/external Qdrant.
 """
 from __future__ import annotations
 
+import threading
 import uuid
 
 import pytest
@@ -13,6 +14,7 @@ from qdrant_client import QdrantClient
 
 from backend.app.rag.schemas import Chunk
 from backend.app.rag.vectorstore import (
+    get_qdrant_client,
     get_vector_store,
     index_chunks,
     search_knowledge_base,
@@ -236,3 +238,32 @@ def test_missing_collection_returns_empty_gracefully():
 
     client.delete_collection(COLLECTION)
     assert search_knowledge_base("q", vector_store=store, score_threshold=-1.0) == []
+
+
+# ── Client factory (Phase 2F Step 10 regression) ─────────────────────────────
+
+def test_get_qdrant_client_is_singleton_and_race_free(tmp_path):
+    """Concurrent first calls for one storage path return ONE client.
+
+    Regression for Phase 2F Step 10: local Qdrant holds an exclusive file
+    lock per storage folder, so simultaneous calls must never construct two
+    clients for the same path. The old ``lru_cache`` only deduplicated
+    *completed* calls, so concurrent workers both constructed a client and
+    the second crashed with "already accessed by another instance".
+    """
+    path = str(tmp_path / "qdrant")
+    created: list[QdrantClient] = []
+
+    def _open():
+        created.append(get_qdrant_client(path=path))
+
+    threads = [threading.Thread(target=_open) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Every caller got a client (none raised) and all are the SAME instance.
+    assert len(created) == 4
+    assert all(c is created[0] for c in created)
+    assert get_qdrant_client(path=path) is created[0]

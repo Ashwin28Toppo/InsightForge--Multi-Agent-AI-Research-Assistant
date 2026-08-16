@@ -8,8 +8,8 @@ Everything is dependency-injectable (client + embeddings) so tests can use
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Iterable
 
 from langchain_core.embeddings import Embeddings
@@ -23,34 +23,50 @@ from backend.app.rag.schemas import Chunk
 # QdrantVectorStore stores chunk metadata under the `metadata` payload key.
 _METADATA_PREFIX = "metadata."
 
+# Qdrant local mode holds an exclusive file lock on its storage folder, so
+# only ONE client per path may exist per process, and QdrantLocal is not
+# internally thread-safe. Research workers run concurrently in background
+# threads, so client creation must be race-free and every Qdrant call must
+# be serialized. Without this, two jobs starting at once both construct
+# ``QdrantClient(path=...)`` (the previous ``lru_cache`` did not deduplicate
+# in-flight calls) and the second raises "Storage folder ... is already
+# accessed by another instance" (Phase 2F Step 10).
+_qdrant_lock = threading.RLock()
+_qdrant_clients: dict[tuple[str | None, str | None], QdrantClient] = {}
 
-@lru_cache(maxsize=4)
+
 def get_qdrant_client(url: str | None = None, path: str | None = None) -> QdrantClient:
-    """Build a Qdrant client: remote (URL) or local embedded (path / memory).
+    """Return the process-wide Qdrant client for a resolved (url, path) pair.
 
-    Cached per (url, path) because Qdrant local mode holds an exclusive file
-    lock on its storage folder — only one client per path may exist in a
-    process. Tests inject their own ``QdrantClient(":memory:")`` instead.
+    Remote (URL) or local embedded (path / memory). Cached per resolved
+    (url, path) under a lock so concurrent workers can never construct two
+    local clients for the same storage folder (which would hit the exclusive
+    file lock). Tests inject their own ``QdrantClient(":memory:")`` instead.
     """
     url = url if url is not None else settings.qdrant_url
     path = path if path is not None else settings.qdrant_path
-    if url:
-        return QdrantClient(url=url)
-    return QdrantClient(path=path)
+    key = (url, path)
+    with _qdrant_lock:
+        client = _qdrant_clients.get(key)
+        if client is None:
+            client = QdrantClient(url=url) if url else QdrantClient(path=path)
+            _qdrant_clients[key] = client
+        return client
 
 
 def _ensure_collection(
     client: QdrantClient, collection_name: str, vector_size: int
 ) -> None:
     """Idempotent collection creation — reuse existing, never destroy data."""
-    if not client.collection_exists(collection_name):
-        client.create_collection(
-            collection_name=collection_name,
-            vectors_config=models.VectorParams(
-                size=vector_size,
-                distance=models.Distance.COSINE,
-            ),
-        )
+    with _qdrant_lock:
+        if not client.collection_exists(collection_name):
+            client.create_collection(
+                collection_name=collection_name,
+                vectors_config=models.VectorParams(
+                    size=vector_size,
+                    distance=models.Distance.COSINE,
+                ),
+            )
 
 
 def get_vector_store(
@@ -137,12 +153,13 @@ def index_chunks(
 
     inserted = 0
     for document_id, doc_chunks in by_document.items():
-        qclient.delete(collection, points_selector=_document_filter(document_id))
-        store.add_texts(
-            texts=[c.text for c in doc_chunks],
-            metadatas=[_chunk_metadata(c) for c in doc_chunks],
-            ids=[c.chunk_id for c in doc_chunks],
-        )
+        with _qdrant_lock:
+            qclient.delete(collection, points_selector=_document_filter(document_id))
+            store.add_texts(
+                texts=[c.text for c in doc_chunks],
+                metadatas=[_chunk_metadata(c) for c in doc_chunks],
+                ids=[c.chunk_id for c in doc_chunks],
+            )
         inserted += len(doc_chunks)
     return inserted
 
@@ -203,11 +220,12 @@ def search_knowledge_base(
     )
 
     # Graceful when the collection has not been created (e.g. deleted).
-    if not store.client.collection_exists(store.collection_name):
-        return []
+    with _qdrant_lock:
+        if not store.client.collection_exists(store.collection_name):
+            return []
 
-    qfilter = _document_filter(document_id) if document_id else None
-    results = store.similarity_search_with_score(query, k=top_k, filter=qfilter)
+        qfilter = _document_filter(document_id) if document_id else None
+        results = store.similarity_search_with_score(query, k=top_k, filter=qfilter)
 
     retrieved: list[RetrievedChunk] = []
     for doc, score in results:
