@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import AppShell from "@/components/layout/AppShell";
 import ResearchComposer from "@/components/research/ResearchComposer";
+import AuthGate from "@/components/auth/AuthGate";
 import { submitResearch } from "@/lib/api/research";
 import { apiErrorMessage } from "@/lib/utils/errors";
 import { getHistory } from "@/lib/history/store";
@@ -78,16 +79,21 @@ export default function Home() {
           </p>
         </section>
 
-        {/* Composer — the primary action */}
+        {/* Composer — the primary action (Phase 2F Step 7: authenticated only) */}
         <section className="space-y-3 max-w-3xl">
           <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-muted-foreground">
             Research Query
           </h2>
-          <ResearchComposer
-            onSubmit={handleResearchSubmit}
-            isLoading={isLoading}
-            externalError={submitError}
-          />
+          <AuthGate
+            promptTitle="Sign in to start a research run"
+            promptBody="Research is authenticated — sign in to submit queries and stream results live."
+          >
+            <ResearchComposer
+              onSubmit={handleResearchSubmit}
+              isLoading={isLoading}
+              externalError={submitError}
+            />
+          </AuthGate>
         </section>
 
         {/* Pipeline overview — compact execution trace */}

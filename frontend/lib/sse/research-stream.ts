@@ -80,7 +80,9 @@ export function subscribeResearchStream(
 
   const connect = () => {
     if (closed || terminal) return;
-    const es = new EventSource(url);
+    // Phase 2F Step 7: the stream endpoint is authenticated — EventSource
+    // does NOT send cookies cross-origin unless explicitly enabled.
+    const es = new EventSource(url, { withCredentials: true });
     source = es;
 
     es.addEventListener("open", () => {

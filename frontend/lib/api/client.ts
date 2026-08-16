@@ -32,6 +32,11 @@ export async function apiFetch<T>(
   const config: RequestInit = {
     ...options,
     headers,
+    // Cookie-based auth (Phase 2F Step 3): the JWT lives in an HttpOnly
+    // cookie set by the backend. ``include`` makes the browser attach it on
+    // cross-origin calls (localhost:3000 -> 127.0.0.1:8000) and accept the
+    // Set-Cookie response. Required to consume the auth/history APIs.
+    credentials: "include",
   };
 
   const response = await fetch(`${BASE_URL}${endpoint}`, config);

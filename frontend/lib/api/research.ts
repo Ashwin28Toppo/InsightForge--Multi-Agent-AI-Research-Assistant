@@ -6,6 +6,7 @@ import {
   ResearchStatusResponse,
   ResearchProgressResponse,
   ResearchRequest,
+  ResearchHistoryResponse,
 } from "../types/api";
 
 /** Start a research job. Returns the created job id (HTTP 202). */
@@ -40,4 +41,11 @@ export function getJobProgress(
     `/research/${encodeURIComponent(jobId)}/progress`,
     { signal }
   );
+}
+
+/** Get the authenticated user's research history (newest first). */
+export function getResearchHistory(
+  signal?: AbortSignal
+): Promise<ResearchHistoryResponse> {
+  return apiFetch<ResearchHistoryResponse>("/research/history", { signal });
 }

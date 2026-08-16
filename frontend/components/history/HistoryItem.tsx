@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { Calendar, Clock, Trash2 } from "lucide-react";
+import { Calendar, Clock, Trash2, AlertCircle } from "lucide-react";
 import StatusBadge from "@/components/ui/StatusBadge";
 import ConfidenceBadge from "@/components/ui/ConfidenceBadge";
 import type { JobStatus } from "@/lib/types/api";
@@ -10,16 +10,26 @@ export interface HistoryItemView {
   jobId: string;
   query: string;
   status: JobStatus;
+  /** Created-at timestamp, pre-formatted for display. */
   date: string;
+  /** Updated-at timestamp, pre-formatted for display. */
+  updatedAt?: string;
   duration?: string;
   confidence?: string;
   snippet?: string;
+  /** Most recent completed pipeline stage (server-provided). */
+  currentStep?: string;
+  /** Ordered completed pipeline stages (server-provided). */
+  completedSteps?: string[];
+  /** Safe error message for failed jobs (server-provided). */
+  error?: string;
 }
 
 interface HistoryItemProps {
   item: HistoryItemView;
   onOpen: (jobId: string) => void;
-  onDelete: (jobId: string) => void;
+  /** When omitted, no delete affordance is rendered (server-backed history). */
+  onDelete?: (jobId: string) => void;
 }
 
 export default function HistoryItem({ item, onOpen, onDelete }: HistoryItemProps) {
@@ -35,6 +45,7 @@ export default function HistoryItem({ item, onOpen, onDelete }: HistoryItemProps
 
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!onDelete) return;
     if (!confirming) {
       setConfirming(true);
       confirmTimer.current = setTimeout(() => setConfirming(false), 2500);
@@ -43,6 +54,8 @@ export default function HistoryItem({ item, onOpen, onDelete }: HistoryItemProps
     if (confirmTimer.current) clearTimeout(confirmTimer.current);
     onDelete(item.jobId);
   };
+
+  const stepCount = item.completedSteps?.length ?? 0;
 
   return (
     <div
@@ -64,6 +77,15 @@ export default function HistoryItem({ item, onOpen, onDelete }: HistoryItemProps
             <Calendar size={12} />
             {item.date}
           </span>
+          {item.updatedAt && (
+            <>
+              <span aria-hidden="true">•</span>
+              <span className="inline-flex items-center gap-1">
+                <Clock size={12} />
+                Updated: {item.updatedAt}
+              </span>
+            </>
+          )}
           {item.duration && (
             <>
               <span aria-hidden="true">•</span>
@@ -84,6 +106,30 @@ export default function HistoryItem({ item, onOpen, onDelete }: HistoryItemProps
             {item.snippet}
           </p>
         )}
+
+        {/* Progress / error metadata (server-provided) */}
+        {(item.currentStep || stepCount > 0) && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {item.currentStep && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-muted border border-border text-[10px] font-mono text-muted-foreground">
+                <Clock size={10} />
+                STEP: {item.currentStep}
+              </span>
+            )}
+            {stepCount > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-muted border border-border text-[10px] font-mono text-muted-foreground">
+                {stepCount} stage{stepCount === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
+        )}
+
+        {item.status === "failed" && item.error && (
+          <p className="flex items-start gap-1.5 text-xs text-destructive leading-relaxed">
+            <AlertCircle size={13} className="mt-0.5 shrink-0" />
+            <span className="line-clamp-2">{item.error}</span>
+          </p>
+        )}
       </div>
 
       {/* Right side status/actions */}
@@ -95,10 +141,11 @@ export default function HistoryItem({ item, onOpen, onDelete }: HistoryItemProps
           )}
         </div>
 
-        <button
-          type="button"
-          onClick={handleDeleteClick}
-          className={`p-2 rounded-lg cursor-pointer transition-all ${
+        {onDelete && (
+          <button
+            type="button"
+            onClick={handleDeleteClick}
+            className={`p-2 rounded-lg cursor-pointer transition-all ${
             confirming
               ? "text-destructive bg-destructive/10 border border-destructive/30"
               : "text-muted-foreground hover:text-destructive hover:bg-destructive/10 border border-transparent"
@@ -117,7 +164,8 @@ export default function HistoryItem({ item, onOpen, onDelete }: HistoryItemProps
           ) : (
             <Trash2 size={15} />
           )}
-        </button>
+          </button>
+        )}
       </div>
     </div>
   );

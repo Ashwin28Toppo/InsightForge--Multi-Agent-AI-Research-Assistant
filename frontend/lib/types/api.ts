@@ -85,3 +85,39 @@ export interface SseProgressPayload {
 
 /** The failed SSE event adds a safe error string to the progress payload. */
 export type SseFailedPayload = SseProgressPayload & { error: string };
+
+// ── Authentication (Phase 2F Steps 3 & 7) ──────────────────────────────────
+
+/** Safe public user representation returned by /auth/* endpoints. */
+export interface UserResponse {
+  id: string;
+  email: string;
+  name: string | null;
+  created_at: string;
+}
+
+/** Request body for POST /auth/signup (name is optional). */
+export interface AuthRequest {
+  email: string;
+  password: string;
+  name?: string | null;
+}
+
+// ── Research history (Phase 2F Step 6/7) ───────────────────────────────────
+
+/** One entry in GET /research/history. ``user_id`` is never exposed. */
+export interface ResearchHistoryItem {
+  job_id: string;
+  query: string;
+  status: JobStatus;
+  created_at: string;
+  updated_at: string;
+  current_step?: string | null;
+  completed_steps?: string[];
+  result?: ResearchResult;
+  error?: string;
+}
+
+export interface ResearchHistoryResponse {
+  jobs: ResearchHistoryItem[];
+}

@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Plus,
   History,
@@ -11,9 +11,12 @@ import {
   LayoutGrid,
   ChevronLeft,
   ChevronRight,
+  LogIn,
+  LogOut,
 } from "lucide-react";
 import BottomTabBar from "./BottomTabBar";
 import { useHealth } from "@/hooks/useHealth";
+import { useAuth } from "@/lib/auth/auth-context";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -29,10 +32,26 @@ const HEALTH_LABELS: Record<string, string> = {
 
 export default function AppShell({ children, healthStatus }: AppShellProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const { healthStatus: liveHealth } = useHealth();
+  const { user, status: authStatus, logout } = useAuth();
   const status = healthStatus ?? liveHealth;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  const userInitial =
+    user?.name?.trim()?.charAt(0).toUpperCase() ||
+    user?.email?.charAt(0).toUpperCase() ||
+    "?";
+  const displayName = user?.name?.trim() || user?.email || "";
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } finally {
+      router.push("/");
+    }
+  };
 
   const navItems = [
     { name: "New Research", href: "/", icon: Plus, matchExact: true },
@@ -126,16 +145,48 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
             )}
           </button>
 
-          {/* User profile (mock) */}
-          <div className="flex items-center gap-3 px-2 py-1.5 rounded-lg bg-muted/30">
-            <div className="h-8 w-8 rounded-full bg-slate-800 border border-border-strong flex items-center justify-center font-bold text-xs select-none">
-              R
-            </div>
-            {!sidebarCollapsed && (
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold truncate">Researcher</p>
-                <p className="text-[10px] text-muted-foreground truncate">workspace_active</p>
-              </div>
+          {/* User profile / session (Phase 2F Step 7) */}
+          <div className="px-2 py-1.5 rounded-lg bg-muted/30 space-y-1.5">
+            {authStatus === "authenticated" && user ? (
+              <>
+                <div className="flex items-center gap-3">
+                  <div className="h-8 w-8 rounded-full bg-primary/90 border border-primary/30 flex items-center justify-center font-bold text-xs select-none text-primary-foreground">
+                    {userInitial}
+                  </div>
+                  {!sidebarCollapsed && (
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold truncate">
+                        {displayName}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground truncate">
+                        {user.email}
+                      </p>
+                    </div>
+                  )}
+                </div>
+                {!sidebarCollapsed && (
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="flex items-center gap-1.5 w-full px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider text-muted-foreground hover:text-destructive hover:bg-destructive/5 transition-all cursor-pointer"
+                  >
+                    <LogOut size={12} />
+                    <span>Sign out</span>
+                  </button>
+                )}
+              </>
+            ) : authStatus === "checking" ? (
+              <p className="text-[10px] font-mono text-muted-foreground text-center py-2 animate-pulse select-none">
+                Checking session…
+              </p>
+            ) : (
+              <Link
+                href="/auth"
+                className="flex items-center gap-1.5 w-full px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider text-muted-foreground hover:text-primary hover:bg-muted transition-all cursor-pointer"
+              >
+                <LogIn size={12} />
+                {!sidebarCollapsed && <span>Sign in</span>}
+              </Link>
             )}
           </div>
         </div>

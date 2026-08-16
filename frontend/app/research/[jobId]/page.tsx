@@ -8,11 +8,13 @@ import ReportViewer from "@/components/report/ReportViewer";
 import TraceabilityRail from "@/components/layout/TraceabilityRail";
 import StatusBadge from "@/components/ui/StatusBadge";
 import Skeleton from "@/components/feedback/Skeleton";
+import SignInPrompt from "@/components/auth/SignInPrompt";
 import { useResearchStream } from "@/hooks/useResearchStream";
 import { useResearchJob } from "@/hooks/useResearchJob";
 import { submitResearch } from "@/lib/api/research";
 import { apiErrorMessage } from "@/lib/utils/errors";
 import { saveHistoryItem } from "@/lib/history/store";
+import { useAuth } from "@/lib/auth/auth-context";
 import { PIPELINE_STAGES } from "@/lib/constants/pipeline";
 import {
   Clock,
@@ -38,8 +40,40 @@ const getLastQuery = () => {
 
 export default function ResearchWorkspace() {
   const params = useParams();
-  const router = useRouter();
+  const { status: authStatus } = useAuth();
   const jobId = (params?.jobId as string) || "";
+
+  // Phase 2F Step 7: research jobs are private to the authenticated user.
+  // The backend remains the authority (it 401s without a valid cookie); this
+  // gate just keeps the workspace from mounting data hooks when signed out.
+  if (authStatus === "checking") {
+    return (
+      <AppShell>
+        <div className="flex-1 max-w-5xl w-full mx-auto px-6 py-10">
+          <div className="bg-card border border-border rounded-xl p-6" aria-busy="true">
+            <Skeleton lines={3} />
+          </div>
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (authStatus === "unauthenticated") {
+    return (
+      <AppShell>
+        <SignInPrompt
+          title="Sign in to view this research"
+          body="Research jobs are private to your account. Sign in to access this job's live progress and result."
+        />
+      </AppShell>
+    );
+  }
+
+  return <ResearchWorkspaceContent jobId={jobId} />;
+}
+
+function ResearchWorkspaceContent({ jobId }: { jobId: string }) {
+  const router = useRouter();
 
   // Gate the stream off once the job is known to be missing/expired so the
   // SSE + progress fallback stop (no pointless reconnects or polling).
