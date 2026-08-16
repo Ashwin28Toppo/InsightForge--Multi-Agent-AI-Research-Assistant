@@ -1,0 +1,17 @@
+# Backend Docker build context — keep the image minimal and secrets out.
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.git
+.gitignore
+.env
+.env.*
+!*.md
+frontend
+data
+qdrant_storage
+tests
+*.egg-info

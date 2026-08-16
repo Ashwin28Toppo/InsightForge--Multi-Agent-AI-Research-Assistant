@@ -1,0 +1,66 @@
+# ---- Phase 2F Step 11: InsightForge production-style local stack ----
+#
+# Services: FastAPI backend, Next.js frontend, Qdrant (vector store).
+# - All services share one internal network; only backend:8000 and
+#   frontend:3000 are published to the host.
+# - Qdrant data is persisted in a named volume and survives restarts.
+# - Secrets (GROQ_API_KEY, TAVILY_KEY_KEY/TAVILY_API_KEY, GOOGLE_API_KEY,
+#   AUTH_JWT_SECRET, ...) come from the repo `.env` file via `env_file` —
+#   never hardcoded here.
+# - The backend reaches PostgreSQL through DATABASE_URL (default: the host's
+#   PostgreSQL via host.docker.internal; override with `DATABASE_URL=...`).
+name: insightforge
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    expose:
+      - "6333" # internal only — the backend talks to it on the network
+    networks:
+      - insightforge-net
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Qdrant runs as a service on the compose network (remote mode); the
+      # Step 10 vector-store implementation already supports QDRANT_URL.
+      QDRANT_URL: http://qdrant:6333
+      # PostgreSQL is external to this stack; default to the host's instance
+      # (e.g. the local `insightforge-pg` container). Override as needed.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://insightforge:insightforge@host.docker.internal:5432/insightforge}
+    ports:
+      - "8000:8000" # browser + frontend reach the API here
+    depends_on:
+      - qdrant
+    networks:
+      - insightforge-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Browser calls the backend through the published host port.
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    restart: unless-stopped
+    ports:
+      - "3000:3000" # browser
+    depends_on:
+      - backend
+    networks:
+      - insightforge-net
+
+networks:
+  insightforge-net:
+    driver: bridge
+
+volumes:
+  qdrant_storage:

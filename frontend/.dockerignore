@@ -1,0 +1,9 @@
+# Frontend Docker build context — keep the image minimal and secrets out.
+node_modules
+.next
+.git
+.gitignore
+.env
+.env.*
+npm-debug.log*
+README.md
