@@ -667,3 +667,63 @@ def test_stream_failed_event_contains_no_traceback(monkeypatch):
     assert "event: failed" in event_text
     assert "boom in stream" in event_text
     assert "Traceback" not in event_text
+
+
+# ── CORS (Phase 2D Step 7) ───────────────────────────────────────────────────
+
+
+def test_cors_allowed_origin_localhost():
+    response = client.get("/health", headers={"Origin": "http://localhost:3000"})
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+
+def test_cors_allowed_origin_127():
+    response = client.get("/health", headers={"Origin": "http://127.0.0.1:3000"})
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "http://127.0.0.1:3000"
+
+
+def test_cors_disallowed_origin_not_granted():
+    response = client.get("/health", headers={"Origin": "http://evil.example.com"})
+    assert response.status_code == 200
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_cors_preflight_for_post_research():
+    response = client.options(
+        "/research",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
+    assert "POST" in response.headers.get("access-control-allow-methods", "")
+
+
+def test_cors_sse_stream_allowed(monkeypatch):
+    async def fake_streaming(query, on_step=None):
+        for step in ALL_STAGES:
+            if on_step:
+                on_step(step)
+        return dict(REPRESENTATIVE_RESULT)
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_streaming)
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+
+    with client.stream(
+        "GET",
+        f"/research/{job_id}/stream",
+        headers={"Origin": "http://localhost:3000"},
+    ) as response:
+        assert response.status_code == 200
+        assert (
+            response.headers.get("access-control-allow-origin")
+            == "http://localhost:3000"
+        )
+        lines = [line for line in response.iter_lines() if line]
+
+    assert "event: completed" in lines

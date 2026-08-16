@@ -13,6 +13,7 @@ def test_defaults_without_env_file():
     assert s.evidence_max_chars == 300
     assert s.search_snippet_max_chars == 150
     assert s.run_critic is False
+    assert s.cors_origins == ["http://localhost:3000", "http://127.0.0.1:3000"]
     assert s.tavily_max_results == 5
     assert s.scrape_max_chars == 3000
 
@@ -63,3 +64,15 @@ def test_embedding_settings_read_from_env(monkeypatch):
     s = Settings(_env_file=None)
     assert s.embedding_model == "gemini-embedding-001"
     assert s.embedding_dim == 1536
+
+
+def test_cors_origins_parsed_from_comma_separated_env(monkeypatch):
+    monkeypatch.setenv("CORS_ORIGINS", "http://a.example, http://b.example")
+    s = Settings(_env_file=None)
+    assert s.cors_origins == ["http://a.example", "http://b.example"]
+
+
+def test_cors_origins_default_when_env_absent(monkeypatch):
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    s = Settings(_env_file=None)
+    assert s.cors_origins == ["http://localhost:3000", "http://127.0.0.1:3000"]

@@ -3,9 +3,11 @@
 This is the single source of truth for configuration. Values are read from
 environment variables first, then from the ``.env`` file at the project root.
 """
+from typing import Annotated
+
 from dotenv import load_dotenv
-from pydantic import AliasChoices, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import AliasChoices, Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Populate os.environ from .env so libraries that read env vars directly
 # (e.g. ChatGroq) keep working even when not passed an explicit api_key.
@@ -85,6 +87,23 @@ class Settings(BaseSettings):
 
     # ── Storage ───────────────────────────────────────────────────────────
     document_storage_dir: str = "./data/documents"
+
+    # ── API / CORS ────────────────────────────────────────────────────────
+    # Comma-separated list of allowed CORS origins (the future Next.js dev
+    # server). Explicit origins only — never "*".
+    cors_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+    )
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return value
 
 
 settings = Settings()

@@ -19,9 +19,11 @@ from typing import AsyncIterator
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+from backend.app.core.config import settings
 from backend.app.main import arun_research_pipeline_streaming
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,16 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         "unhandled exception on %s %s", request.method, request.url.path
     )
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+# ── CORS (API transport concern only — no auth, no secrets) ─────────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Accept"],
+)
 
 
 # ── In-memory job store (by design; jobs are lost on restart) ────────────────
