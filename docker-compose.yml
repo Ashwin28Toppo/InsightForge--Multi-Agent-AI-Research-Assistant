@@ -70,8 +70,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        # Browser calls the backend through the published host port.
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+        # Public-only: the browser calls the backend through the published
+        # host port. This is the ONLY variable the frontend receives — no
+        # server secrets (API keys, DB credentials) are ever passed to it.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     restart: unless-stopped
     ports:
       - "3000:3000" # browser

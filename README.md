@@ -318,6 +318,25 @@ cmd /c "docker compose exec -T postgres pg_dump -U insightforge -d insightforge 
 cmd /c "docker compose exec -T postgres psql -U insightforge -d insightforge < backup.sql"
 ```
 
+**Environment setup** — copy `.env.example` to `.env` and fill in values.
+Real secrets live only in `.env` (gitignored); nothing secret is committed.
+Server secrets are injected into the backend container only — the frontend
+receives only the public `NEXT_PUBLIC_API_BASE_URL`:
+
+| Variable | Required | Notes |
+|---|---|---|
+| `GROQ_API_KEY` | yes (real jobs) | LLM provider |
+| `TAVILY_API_KEY` (or `TAVILY_KEY_KEY`) | yes (real jobs) | web search |
+| `GOOGLE_API_KEY` | yes (real jobs) | Gemini embeddings |
+| `AUTH_JWT_SECRET` | production | strong random, ≥32 bytes; dev placeholder in `.env.example` |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | compose | builds `DATABASE_URL` for the `postgres` service |
+| `DATABASE_URL` | outside compose | full asyncpg URL |
+| `QDRANT_URL` | compose | set internally to the `qdrant` service |
+| `NEXT_PUBLIC_API_BASE_URL` | frontend (public) | browser → backend host origin |
+
+Production must also set `AUTH_COOKIE_SECURE=true` behind HTTPS and use
+strong `POSTGRES_PASSWORD` / `AUTH_JWT_SECRET` values.
+
 ---
 
 ## Rules for Future AI Coding Agents
