@@ -18,8 +18,8 @@ import threading
 from typing import AsyncIterator
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from backend.app.main import arun_research_pipeline_streaming
@@ -34,6 +34,21 @@ app = FastAPI(
     ),
     version="0.2.0",
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Last-resort handler: never leak Python tracebacks to API clients.
+
+    The full exception is logged server-side; the client only ever receives a
+    safe, structured ``{"detail": "Internal server error"}`` response. More
+    specific handlers (e.g. ``HTTPException`` for 404, Pydantic validation for
+    422) keep taking precedence over this one.
+    """
+    logger.exception(
+        "unhandled exception on %s %s", request.method, request.url.path
+    )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 # ── In-memory job store (by design; jobs are lost on restart) ────────────────

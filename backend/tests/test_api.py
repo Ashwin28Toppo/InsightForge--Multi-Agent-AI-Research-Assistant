@@ -607,3 +607,63 @@ def test_stream_does_not_execute_pipeline(monkeypatch):
 
     assert "event: completed" in lines
     assert pipeline_calls == ["q"]  # still exactly one invocation (from POST)
+
+
+# ── Error-handling hardening (Phase 2D Step 6) ──────────────────────────────
+
+
+def test_unexpected_exception_returns_structured_500(monkeypatch):
+    # Force an unexpected exception inside the POST handler: the global
+    # handler must return a safe structured 500 (never a traceback).
+    class _BoomResponse:
+        def __init__(self, **kwargs):
+            raise RuntimeError("response construction boom")
+
+    monkeypatch.setattr(api, "ResearchJobResponse", _BoomResponse)
+    monkeypatch.setattr(api, "_run_job", lambda job_id, query: None)
+
+    response = client.post("/research", json={"query": "q"})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
+    assert "Traceback" not in response.text
+    assert "boom" not in response.text  # internal message not leaked
+
+
+def test_validation_error_returns_structured_detail():
+    response = client.post("/research", json={"query": "   "})
+    assert response.status_code == 422
+    # Default FastAPI validation shape: a structured detail list, no traceback.
+    assert isinstance(response.json()["detail"], list)
+    assert "Traceback" not in response.text
+
+
+def test_failed_job_error_is_safe_and_contains_no_traceback(monkeypatch, caplog):
+    async def failing_pipeline(query, on_step=None):
+        raise ValueError("secret failure detail")
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", failing_pipeline)
+
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+    body = client.get(f"/research/{job_id}").json()
+
+    assert body["status"] == "failed"
+    assert body["error"] == "ValueError: secret failure detail"
+    assert "Traceback" not in body["error"]
+    assert any("research job" in record.message for record in caplog.records)
+
+
+def test_stream_failed_event_contains_no_traceback(monkeypatch):
+    async def failing_streaming(query, on_step=None):
+        raise RuntimeError("boom in stream")
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", failing_streaming)
+
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+    with client.stream("GET", f"/research/{job_id}/stream") as response:
+        lines = [line for line in response.iter_lines() if line]
+
+    event_text = "\n".join(lines)
+    assert "event: failed" in event_text
+    assert "boom in stream" in event_text
+    assert "Traceback" not in event_text
