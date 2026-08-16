@@ -1,13 +1,20 @@
 """FastAPI transport layer for the InsightForge research pipeline.
 
-Thin transport layer (Phase 2D Steps 1-2). Research execution is delegated to
-``backend.app.main.run_research_pipeline``; this module only owns job lifecycle
-management over an in-memory job store (queued -> running -> completed | failed).
+Thin transport layer (Phase 2D Steps 1-2, finalized in Step 10). Research
+execution is delegated to ``backend.app.main``; this module only owns job
+lifecycle management over an in-memory job store
+(queued -> running -> completed | failed).
 
 Endpoints:
-    GET  /health             - liveness probe (never runs the pipeline).
-    POST /research           - create an async research job (HTTP 202 + job_id).
-    GET  /research/{job_id}  - current job status/result.
+    GET  /health                      - liveness probe (never runs the pipeline).
+    POST /research                    - create an async research job (HTTP 202 + job_id).
+    GET  /research/{job_id}           - current job status/result.
+    GET  /research/{job_id}/progress  - live progress (current/completed steps).
+    GET  /research/{job_id}/stream    - Server-Sent Events progress stream.
+
+Every response carries an ``X-Request-ID`` header (Step 9). Error contract:
+404 for unknown/expired jobs, 422 for invalid request bodies, 500 for
+unexpected server errors (safe ``{"detail": "Internal server error"}`` body).
 """
 from __future__ import annotations
 
@@ -17,7 +24,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
@@ -204,9 +211,15 @@ def _cleanup_expired_jobs() -> None:
 
 
 class ResearchRequest(BaseModel):
-    """Request body for ``POST /research``."""
+    """Request body for ``POST /research``.
 
-    query: str
+    ``query`` is stripped of surrounding whitespace and must not be blank.
+    """
+
+    query: str = Field(
+        description="The research question or topic to investigate.",
+        min_length=1,
+    )
 
     @field_validator("query")
     @classmethod
@@ -217,29 +230,72 @@ class ResearchRequest(BaseModel):
         return stripped
 
 
-class ResearchJobResponse(BaseModel):
-    """Response returned immediately when a research job is submitted."""
+class HealthResponse(BaseModel):
+    """Liveness probe response body."""
 
-    job_id: str
-    status: str
+    status: str = Field(
+        description='Always ``"ok"`` when the service is up.',
+        examples=["ok"],
+    )
+
+
+class ResearchJobResponse(BaseModel):
+    """Response returned immediately when a research job is submitted.
+
+    The pipeline runs asynchronously in the background; clients poll
+    ``GET /research/{job_id}`` for the outcome.
+    """
+
+    job_id: str = Field(description="Unique identifier of the created job.")
+    status: Literal["queued"] = Field(
+        description='Initial job state (always ``"queued"`` at creation).',
+        examples=["queued"],
+    )
 
 
 class ResearchStatusResponse(BaseModel):
-    """Current status of a research job (result only when completed)."""
+    """Current status/result of a research job.
 
-    job_id: str
-    status: str
-    result: dict | None = None
-    error: str | None = None
+    ``result`` is populated only for ``completed`` jobs, ``error`` only for
+    ``failed`` jobs. ``result`` is intentionally an opaque dictionary (the
+    full research output) to keep the transport layer decoupled from the
+    pipeline's internal result schema.
+    """
+
+    job_id: str = Field(description="Unique identifier of the job.")
+    status: Literal["queued", "running", "completed", "failed"] = Field(
+        description="Current lifecycle state of the job."
+    )
+    result: dict | None = Field(
+        default=None,
+        description="Full research output (present only when ``status`` is ``completed``).",
+    )
+    error: str | None = Field(
+        default=None,
+        description="Safe error message (present only when ``status`` is ``failed``).",
+    )
 
 
 class ResearchProgressResponse(BaseModel):
-    """Live progress of a research job (status/result live on the other endpoint)."""
+    """Live progress of a research job.
 
-    job_id: str
-    status: str
-    current_step: str | None = None
-    completed_steps: list[str] = Field(default_factory=list)
+    ``current_step`` is the most recent logical stage reported as completed by
+    the graph; ``completed_steps`` is an ordered event list (stages may repeat
+    when the conditional research loop re-runs research).
+    """
+
+    job_id: str = Field(description="Unique identifier of the job.")
+    status: Literal["queued", "running", "completed", "failed"] = Field(
+        description="Current lifecycle state of the job."
+    )
+    current_step: str | None = Field(
+        default=None,
+        description="Most recent completed stage, or null before the first stage.",
+    )
+    completed_steps: list[str] = Field(
+        default_factory=list,
+        description="Ordered list of completed stages (may repeat across research rounds).",
+    )
 
 
 def _run_job(job_id: str, query: str) -> None:
@@ -292,13 +348,41 @@ def _run_job(job_id: str, query: str) -> None:
             job["updated_at"] = _utcnow()
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    summary="Liveness probe",
+    description=(
+        "Returns ``{\"status\": \"ok\"}`` when the API is up. Never executes "
+        "the research pipeline."
+    ),
+    responses={
+        200: {"description": "Service is healthy."},
+        500: {"description": "Internal server error."},
+    },
+)
+def health() -> HealthResponse:
     """Liveness probe. Does not execute the research pipeline."""
-    return {"status": "ok"}
+    return HealthResponse(status="ok")
 
 
-@app.post("/research", status_code=202, response_model=ResearchJobResponse)
+@app.post(
+    "/research",
+    status_code=202,
+    response_model=ResearchJobResponse,
+    summary="Submit a research job",
+    description=(
+        "Creates a research job and returns immediately with its ``job_id``. "
+        "The pipeline runs asynchronously in the background; poll "
+        "``GET /research/{job_id}`` for the outcome or follow "
+        "``GET /research/{job_id}/stream`` for live Server-Sent Events."
+    ),
+    responses={
+        202: {"description": "Job accepted; ``job_id`` returned."},
+        422: {"description": "Validation error (missing or blank ``query``)."},
+        500: {"description": "Internal server error."},
+    },
+)
 def research(
     request: Request,
     payload: ResearchRequest,
@@ -335,6 +419,19 @@ def research(
     "/research/{job_id}",
     response_model=ResearchStatusResponse,
     response_model_exclude_none=True,
+    summary="Get job status and result",
+    description=(
+        "Returns the current status of a job and, once ``completed``, its "
+        "full research result (``failed`` jobs carry a safe ``error``). "
+        "Unknown or expired jobs return ``404``."
+    ),
+    responses={
+        200: {
+            "description": "Job status; ``result``/``error`` present when terminal."
+        },
+        404: {"description": "Job not found (unknown or expired)."},
+        500: {"description": "Internal server error."},
+    },
 )
 def research_status(job_id: str) -> ResearchStatusResponse:
     """Return the current status/result of a research job (404 if unknown)."""
@@ -352,7 +449,21 @@ def research_status(job_id: str) -> ResearchStatusResponse:
     return ResearchStatusResponse(**payload)
 
 
-@app.get("/research/{job_id}/progress", response_model=ResearchProgressResponse)
+@app.get(
+    "/research/{job_id}/progress",
+    response_model=ResearchProgressResponse,
+    summary="Get job progress",
+    description=(
+        "Returns the live progress of a job: the most recent completed stage "
+        "(``current_step``) and the ordered ``completed_steps`` list. Unknown "
+        "or expired jobs return ``404``."
+    ),
+    responses={
+        200: {"description": "Live progress payload."},
+        404: {"description": "Job not found (unknown or expired)."},
+        500: {"description": "Internal server error."},
+    },
+)
 def research_progress(job_id: str) -> ResearchProgressResponse:
     """Return the live progress of a research job (404 if unknown).
 
@@ -446,7 +557,25 @@ async def _job_event_stream(job_id: str) -> AsyncIterator[str]:
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 
 
-@app.get("/research/{job_id}/stream")
+@app.get(
+    "/research/{job_id}/stream",
+    response_class=StreamingResponse,
+    summary="Stream job progress (Server-Sent Events)",
+    description=(
+        "Streams Server-Sent Events as a job's state changes: ``queued``, "
+        "``progress``, then a terminal ``completed`` or ``failed`` event. The "
+        "stream only observes the existing job state — it never runs the "
+        "research pipeline. Unknown or expired jobs return ``404``."
+    ),
+    responses={
+        200: {
+            "description": "Server-Sent Events stream.",
+            "content": {"text/event-stream": {}},
+        },
+        404: {"description": "Job not found (unknown or expired)."},
+        500: {"description": "Internal server error."},
+    },
+)
 async def research_stream(job_id: str) -> StreamingResponse:
     """Stream Server-Sent Events for a research job (404 if unknown).
 

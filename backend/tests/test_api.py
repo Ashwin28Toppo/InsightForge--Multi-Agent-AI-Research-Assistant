@@ -1191,3 +1191,179 @@ def test_cors_allows_x_request_id_header():
     assert "x-request-id" in allowed
     # The observability middleware is outermost, so preflight also gets an ID.
     assert response.headers.get("x-request-id")
+
+
+# ── API contract / OpenAPI (Phase 2D Step 10) ────────────────────────────────
+
+
+def _openapi() -> dict:
+    return client.get("/openapi.json").json()
+
+
+def _is_nullable_schema(schema: dict) -> bool:
+    """True if an OpenAPI 3.1 schema allows null.
+
+    Handles ``nullable: true`` (3.0), ``type: "null"`` and ``type: [...]``
+    (3.1), and the ``anyOf``-with-null form Pydantic v2 emits.
+    """
+    if schema.get("nullable"):
+        return True
+    if schema.get("type") == "null":
+        return True
+    if isinstance(schema.get("type"), list):
+        return "null" in schema["type"]
+    if "anyOf" in schema:
+        return any(_is_nullable_schema(item) for item in schema["anyOf"])
+    return False
+
+
+def test_openapi_lists_all_endpoints_and_methods():
+    spec = _openapi()
+    assert spec["openapi"].startswith("3.1")
+    assert set(spec["paths"]) == {
+        "/health",
+        "/research",
+        "/research/{job_id}",
+        "/research/{job_id}/progress",
+        "/research/{job_id}/stream",
+    }
+    assert list(spec["paths"]["/health"]) == ["get"]
+    assert list(spec["paths"]["/research"]) == ["post"]
+    assert list(spec["paths"]["/research/{job_id}"]) == ["get"]
+    assert list(spec["paths"]["/research/{job_id}/progress"]) == ["get"]
+    assert list(spec["paths"]["/research/{job_id}/stream"]) == ["get"]
+
+
+def _resolve_ref(spec: dict, schema: dict) -> dict:
+    """Resolve a ``$ref`` to the referenced component schema (if any)."""
+    if "$ref" in schema:
+        name = schema["$ref"].rsplit("/", 1)[-1]
+        return spec["components"]["schemas"][name]
+    return schema
+
+
+def test_openapi_health_response_schema():
+    spec = _openapi()
+    schema = _resolve_ref(
+        spec,
+        spec["paths"]["/health"]["get"]["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"],
+    )
+    assert set(schema["properties"]) == {"status"}
+    assert schema["properties"]["status"]["type"] == "string"
+
+
+def test_openapi_post_research_request_schema():
+    spec = _openapi()
+    op = spec["paths"]["/research"]["post"]
+    body = op["requestBody"]
+    assert body["required"] is True
+    assert (
+        body["content"]["application/json"]["schema"]["$ref"]
+        == "#/components/schemas/ResearchRequest"
+    )
+    props = spec["components"]["schemas"]["ResearchRequest"]["properties"]
+    assert set(props) == {"query"}
+    assert props["query"]["type"] == "string"
+    assert props["query"]["minLength"] == 1
+    assert "422" in op["responses"]  # validation error documented
+
+
+def test_openapi_post_research_response_schema():
+    spec = _openapi()
+    schema = spec["components"]["schemas"]["ResearchJobResponse"]
+    assert set(schema["properties"]) == {"job_id", "status"}
+    assert schema["properties"]["status"]["const"] == "queued"
+    op = spec["paths"]["/research"]["post"]
+    ref = op["responses"]["202"]["content"]["application/json"]["schema"]["$ref"]
+    assert ref.endswith("ResearchJobResponse")
+
+
+def test_openapi_status_schema_matches_contract():
+    spec = _openapi()
+    schema = spec["components"]["schemas"]["ResearchStatusResponse"]
+    props = schema["properties"]
+    assert set(props) == {"job_id", "status", "result", "error"}
+    assert set(props["status"]["enum"]) == {
+        "queued", "running", "completed", "failed",
+    }
+    assert _is_nullable_schema(props["result"])
+    assert _is_nullable_schema(props["error"])
+
+
+def test_openapi_progress_schema_nullable_current_step():
+    spec = _openapi()
+    schema = spec["components"]["schemas"]["ResearchProgressResponse"]
+    props = schema["properties"]
+    assert set(props) == {"job_id", "status", "current_step", "completed_steps"}
+    assert _is_nullable_schema(props["current_step"])  # accurately nullable
+    assert props["completed_steps"]["type"] == "array"
+    assert props["completed_steps"]["items"]["type"] == "string"
+
+
+def test_openapi_stream_documented_as_text_event_stream():
+    spec = _openapi()
+    op = spec["paths"]["/research/{job_id}/stream"]["get"]
+    content = op["responses"]["200"]["content"]
+    assert "text/event-stream" in content
+    assert "application/json" not in content  # no misleading JSON media type
+    assert "404" in op["responses"]
+
+
+def test_openapi_documents_expected_errors():
+    spec = _openapi()
+    status_op = spec["paths"]["/research/{job_id}"]["get"]
+    assert "404" in status_op["responses"]
+    assert "500" in status_op["responses"]
+    assert "404" in spec["paths"]["/research/{job_id}/progress"]["get"]["responses"]
+    assert "404" in spec["paths"]["/research/{job_id}/stream"]["get"]["responses"]
+    assert "500" in spec["paths"]["/health"]["get"]["responses"]
+
+
+def test_contract_post_research_response_schema(monkeypatch):
+    monkeypatch.setattr(api, "_run_job", lambda job_id, query: None)
+    response = client.post("/research", json={"query": "q"})
+    assert response.status_code == 202
+    assert set(response.json()) == {"job_id", "status"}
+    assert response.json()["status"] == "queued"
+
+
+def test_contract_job_status_schema_queued(monkeypatch):
+    monkeypatch.setattr(api, "_run_job", lambda job_id, query: None)
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+    body = client.get(f"/research/{job_id}").json()
+    assert set(body) == {"job_id", "status"}  # no result/error while queued
+
+
+def test_contract_job_status_schema_completed(monkeypatch):
+    async def fake_streaming(query, on_step=None):
+        return dict(REPRESENTATIVE_RESULT)
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", fake_streaming)
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+    body = client.get(f"/research/{job_id}").json()
+    assert set(body) == {"job_id", "status", "result"}
+    assert body["status"] == "completed"
+    assert body["result"]["report"] == "Final research report"
+
+
+def test_contract_job_status_schema_failed(monkeypatch):
+    async def failing_streaming(query, on_step=None):
+        raise RuntimeError("contract boom")
+
+    monkeypatch.setattr(api, "arun_research_pipeline_streaming", failing_streaming)
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+    body = client.get(f"/research/{job_id}").json()
+    assert set(body) == {"job_id", "status", "error"}
+    assert body["status"] == "failed"
+    assert "contract boom" in body["error"]
+
+
+def test_contract_progress_schema(monkeypatch):
+    monkeypatch.setattr(api, "_run_job", lambda job_id, query: None)
+    job_id = client.post("/research", json={"query": "q"}).json()["job_id"]
+    body = client.get(f"/research/{job_id}/progress").json()
+    assert set(body) == {"job_id", "status", "current_step", "completed_steps"}
+    assert body["current_step"] is None
+    assert body["completed_steps"] == []
