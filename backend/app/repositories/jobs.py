@@ -14,6 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable
+from uuid import UUID
 
 _JOB_STATUSES = ("queued", "running", "completed", "failed")
 
@@ -47,6 +48,7 @@ class JobRecord:
 
     job_id: str
     query: str
+    user_id: UUID | None = None
     status: str = "queued"
     result: dict | None = None
     error: str | None = None
@@ -65,6 +67,7 @@ class JobRecord:
         return JobRecord(
             job_id=self.job_id,
             query=self.query,
+            user_id=self.user_id,
             status=self.status,
             result=self.result,
             error=self.error,
@@ -89,6 +92,7 @@ class JobStore(ABC):
         job_id: str,
         query: str,
         *,
+        user_id: UUID | None = None,
         status: str = "queued",
         result: dict | None = None,
         error: str | None = None,
@@ -100,20 +104,35 @@ class JobStore(ABC):
         """Create and store a job, returning a snapshot of it."""
 
     @abstractmethod
-    def get(self, job_id: str) -> JobRecord | None:
-        """Return a snapshot of the job, or ``None`` if it does not exist."""
+    def get(
+        self, job_id: str, user_id: UUID | None = None
+    ) -> JobRecord | None:
+        """Return a snapshot of the job, or ``None`` if it does not exist.
 
-    @abstractmethod
-    def update(self, job_id: str, **changes) -> JobRecord | None:
-        """Apply field updates atomically; returns the updated snapshot.
-
-        Only known fields are accepted (``ValueError`` otherwise). ``updated_at``
-        is only changed when explicitly passed.
+        When ``user_id`` is provided the lookup is owner-scoped: a job owned
+        by a different user is indistinguishable from a missing job.
         """
 
     @abstractmethod
-    def delete(self, job_id: str) -> bool:
-        """Delete a job. Returns ``True`` if it existed, ``False`` otherwise."""
+    def update(
+        self, job_id: str, user_id: UUID | None = None, **changes
+    ) -> JobRecord | None:
+        """Apply field updates atomically; returns the updated snapshot.
+
+        When ``user_id`` is provided the update is owner-scoped (a different
+        owner is treated as a missing job). Only known fields are accepted
+        (``ValueError`` otherwise); ``updated_at`` only changes when passed.
+        ``user_id`` itself is not updatable — ownership is immutable after
+        creation.
+        """
+
+    @abstractmethod
+    def delete(self, job_id: str, user_id: UUID | None = None) -> bool:
+        """Delete a job; owner-scoped when ``user_id`` is provided.
+
+        Returns ``True`` if it existed (and the owner matched), ``False``
+        otherwise.
+        """
 
     @abstractmethod
     def list(self) -> list[JobRecord]:
@@ -175,6 +194,7 @@ class InMemoryJobStore(JobStore):
         job_id: str,
         query: str,
         *,
+        user_id: UUID | None = None,
         status: str = "queued",
         result: dict | None = None,
         error: str | None = None,
@@ -189,6 +209,7 @@ class InMemoryJobStore(JobStore):
         record = JobRecord(
             job_id=job_id,
             query=query,
+            user_id=user_id,
             status=status,
             result=result,
             error=error,
@@ -201,12 +222,18 @@ class InMemoryJobStore(JobStore):
             self._jobs[job_id] = record
         return self._snapshot(record)
 
-    def get(self, job_id: str) -> JobRecord | None:
+    def get(self, job_id: str, user_id: UUID | None = None) -> JobRecord | None:
         with self._lock:
             record = self._jobs.get(job_id)
-            return self._snapshot(record) if record is not None else None
+            if record is None:
+                return None
+            if user_id is not None and record.user_id != user_id:
+                return None
+            return self._snapshot(record)
 
-    def update(self, job_id: str, **changes) -> JobRecord | None:
+    def update(
+        self, job_id: str, user_id: UUID | None = None, **changes
+    ) -> JobRecord | None:
         unknown = set(changes) - set(_UPDATEABLE_FIELDS)
         if unknown:
             raise ValueError(f"unknown job fields: {sorted(unknown)}")
@@ -214,15 +241,21 @@ class InMemoryJobStore(JobStore):
             record = self._jobs.get(job_id)
             if record is None:
                 return None
+            if user_id is not None and record.user_id != user_id:
+                return None
             for field_name, value in changes.items():
                 setattr(record, field_name, value)
             return self._snapshot(record)
 
-    def delete(self, job_id: str) -> bool:
+    def delete(self, job_id: str, user_id: UUID | None = None) -> bool:
         with self._lock:
-            existed = job_id in self._jobs
-            self._jobs.pop(job_id, None)
-            return existed
+            record = self._jobs.get(job_id)
+            if record is None:
+                return False
+            if user_id is not None and record.user_id != user_id:
+                return False
+            del self._jobs[job_id]
+            return True
 
     def list(self) -> list[JobRecord]:
         with self._lock:

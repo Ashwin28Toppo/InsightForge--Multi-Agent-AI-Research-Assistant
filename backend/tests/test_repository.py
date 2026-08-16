@@ -1,11 +1,12 @@
-"""Focused tests for the InMemoryJobStore repository (Phase 2F Step 2).
+"""Focused tests for the InMemoryJobStore repository (Phase 2F Steps 2 & 4).
 
 These cover the operations the API layer relies on (create/get/update/delete,
-lifecycle transitions, TTL cleanup, and concurrency) so the in-memory store —
-and, later, any PostgreSQL implementation behind the same ``JobStore``
-interface — is verified independently of the HTTP layer.
+lifecycle transitions, TTL cleanup, concurrency, and owner-scoped lookups) so
+the in-memory store — and, later, any PostgreSQL implementation behind the
+same ``JobStore`` interface — is verified independently of the HTTP layer.
 """
 import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -13,6 +14,8 @@ import pytest
 from backend.app.repositories.jobs import InMemoryJobStore, JobRecord
 
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+USER_A = uuid.uuid4()
+USER_B = uuid.uuid4()
 REPRESENTATIVE_RESULT = {"query": "q", "report": "Final report", "errors": []}
 
 
@@ -190,6 +193,105 @@ def test_get_returns_independent_completed_steps_copy():
 
     after = store.get("job-1")
     assert after.completed_steps == []  # snapshot mutation did not leak in
+
+
+# ── Owner-scoped access (Phase 2F Step 4) ───────────────────────────────────
+
+
+def test_create_owned_job_and_get_by_owner():
+    store = make_store()
+    created = store.create(job_id="job-a", query="q", user_id=USER_A)
+
+    assert created.user_id == USER_A
+    assert store.get("job-a", user_id=USER_A) is not None
+    assert store.get("job-a", user_id=USER_A).query == "q"
+
+
+def test_get_owned_wrong_owner_is_none():
+    store = make_store()
+    store.create(job_id="job-a", query="q", user_id=USER_A)
+
+    # Indistinguishable from a missing job.
+    assert store.get("job-a", user_id=USER_B) is None
+
+
+def test_get_owned_missing_job_is_none():
+    store = make_store()
+    assert store.get("missing", user_id=USER_A) is None
+
+
+def test_get_unscoped_returns_any_job_for_compat():
+    store = make_store()
+    store.create(job_id="job-a", query="q", user_id=USER_A)
+    assert store.get("job-a") is not None  # no user_id = unscoped (worker/tests)
+    assert store.get("job-a").user_id == USER_A
+
+
+def test_create_without_user_id_keeps_none_for_compat():
+    store = make_store()
+    record = store.create(job_id="job-x", query="q")
+    assert record.user_id is None
+
+
+def test_owned_snapshot_isolates_progress_state():
+    store = make_store()
+    store.create(job_id="job-a", query="q", user_id=USER_A)
+    store.mark_running("job-a")
+
+    snapshot = store.get("job-a", user_id=USER_A)
+    snapshot.completed_steps.append("tampered")
+
+    assert store.get("job-a", user_id=USER_A).completed_steps == []
+
+
+def test_update_owner_scoped():
+    store = make_store()
+    store.create(job_id="job-a", query="q", user_id=USER_A)
+
+    updated = store.update("job-a", user_id=USER_A, status="running")
+    assert updated.status == "running"
+    # Wrong owner: treated as missing.
+    assert store.update("job-a", user_id=USER_B, status="completed") is None
+    assert store.get("job-a").status == "running"  # unchanged
+
+
+def test_update_preserves_owner():
+    store = make_store()
+    store.create(job_id="job-a", query="q", user_id=USER_A)
+
+    store.update("job-a", user_id=USER_A, status="running")
+
+    # ``user_id`` is the owner-scope argument, never an updatable field:
+    # ownership is immutable after creation.
+    assert store.get("job-a").user_id == USER_A
+
+
+def test_delete_owner_scoped():
+    store = make_store()
+    store.create(job_id="job-a", query="q", user_id=USER_A)
+
+    assert store.delete("job-a", user_id=USER_B) is False  # wrong owner: no-op
+    assert store.get("job-a") is not None
+    assert store.delete("job-a", user_id=USER_A) is True
+    assert store.get("job-a") is None
+
+
+def test_delete_owner_scoped_missing_job_is_false():
+    store = make_store()
+    assert store.delete("missing", user_id=USER_A) is False
+
+
+def test_lifecycle_transitions_preserve_owner():
+    store = make_store()
+    store.create(job_id="job-a", query="q", user_id=USER_A)
+    store.mark_running("job-a")
+    store.append_step("job-a", "plan")
+    store.mark_completed("job-a", dict(REPRESENTATIVE_RESULT))
+
+    final = store.get("job-a", user_id=USER_A)
+    assert final.user_id == USER_A
+    assert final.status == "completed"
+    assert final.result == REPRESENTATIVE_RESULT
 
 
 # ── TTL cleanup ──────────────────────────────────────────────────────────────

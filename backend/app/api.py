@@ -1,20 +1,28 @@
 """FastAPI transport layer for the InsightForge research pipeline.
 
-Thin transport layer (Phase 2D Steps 1-2, finalized in Step 10). Research
-execution is delegated to ``backend.app.main``; this module only owns job
-lifecycle management over an in-memory job store
-(queued -> running -> completed | failed).
+Thin transport layer (Phase 2D Steps 1-2, finalized in Step 10; Phase 2F
+Step 4 adds user ownership). Research execution is delegated to
+``backend.app.main``; this module only owns job lifecycle management over the
+job store (queued -> running -> completed | failed) and enforces that every
+research job belongs to exactly one authenticated user.
 
 Endpoints:
-    GET  /health                      - liveness probe (never runs the pipeline).
-    POST /research                    - create an async research job (HTTP 202 + job_id).
-    GET  /research/{job_id}           - current job status/result.
-    GET  /research/{job_id}/progress  - live progress (current/completed steps).
-    GET  /research/{job_id}/stream    - Server-Sent Events progress stream.
+    GET  /health                      - liveness probe (public).
+    POST /research                    - create an async research job (HTTP 202 + job_id; authenticated).
+    GET  /research/{job_id}           - job status/result (authenticated, owner-scoped).
+    GET  /research/{job_id}/progress  - live progress (authenticated, owner-scoped).
+    GET  /research/{job_id}/stream    - Server-Sent Events progress stream (authenticated, owner-scoped).
+    POST /auth/signup|login|logout    - authentication endpoints (Phase 2F Step 3).
+    GET  /auth/me                     - current user (Phase 2F Step 3).
+
+Ownership is derived exclusively from the verified session cookie
+(``get_current_user_id``); a client-supplied ``user_id`` is never accepted.
+Another user's job is indistinguishable from a nonexistent/expired job (404).
 
 Every response carries an ``X-Request-ID`` header (Step 9). Error contract:
-404 for unknown/expired jobs, 422 for invalid request bodies, 500 for
-unexpected server errors (safe ``{"detail": "Internal server error"}`` body).
+401 for unauthenticated, 404 for unknown/expired/not-owned jobs, 422 for
+invalid request bodies, 500 for unexpected server errors (safe
+``{"detail": "Internal server error"}`` body).
 """
 from __future__ import annotations
 
@@ -22,15 +30,16 @@ import asyncio
 import json
 import logging
 import time
-from typing import AsyncIterator, Literal
-from uuid import uuid4
+from typing import Annotated, AsyncIterator, Literal
+from uuid import UUID, uuid4
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from backend.app.auth.deps import get_current_user_id
 from backend.app.core.config import settings
 from backend.app.main import arun_research_pipeline_streaming
 from backend.app.auth.router import router as auth_router
@@ -210,7 +219,12 @@ class ResearchRequest(BaseModel):
     """Request body for ``POST /research``.
 
     ``query`` is stripped of surrounding whitespace and must not be blank.
+    ``extra="forbid"`` rejects any unknown field — in particular a client-
+    supplied ``user_id`` can never influence ownership (ownership is always
+    derived from the authenticated session, never the request body).
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     query: str = Field(
         description="The research question or topic to investigate.",
@@ -354,6 +368,8 @@ def health() -> HealthResponse:
         "The pipeline runs asynchronously in the background; poll "
         "``GET /research/{job_id}`` for the outcome or follow "
         "``GET /research/{job_id}/stream`` for live Server-Sent Events.\n\n"
+        "Requires authentication: the job is owned by the authenticated user "
+        "(derived from the session cookie — never from the request body).\n\n"
         "Each call creates a distinct job — the API has no idempotency key, "
         "so clients should guard against duplicate submissions (e.g. disable "
         "the submit action while one is in flight) and use the returned "
@@ -361,6 +377,7 @@ def health() -> HealthResponse:
     ),
     responses={
         202: {"description": "Job accepted; ``job_id`` returned."},
+        401: {"description": "Not authenticated."},
         422: {"description": "Validation error (missing or blank ``query``)."},
         500: {"description": "Internal server error."},
     },
@@ -369,18 +386,21 @@ def research(
     request: Request,
     payload: ResearchRequest,
     background_tasks: BackgroundTasks,
+    current_user_id: Annotated[UUID, Depends(get_current_user_id)],
 ) -> ResearchJobResponse:
     """Submit a research job and return immediately with its job id.
 
     The pipeline runs in the background via ``BackgroundTasks``; the client
     polls ``GET /research/{job_id}`` for the outcome. The new job id is
     recorded on ``request.state`` so the observability middleware can
-    correlate this request's completion log with the job.
+    correlate this request's completion log with the job. Ownership is taken
+    exclusively from the verified session (``current_user_id``) — a client-
+    supplied ``user_id`` in the body is rejected by the schema.
     """
     _cleanup_expired_jobs()
     job_id = str(uuid4())
     request.state.job_id = job_id
-    store.create(job_id=job_id, query=payload.query)
+    store.create(job_id=job_id, query=payload.query, user_id=current_user_id)
     background_tasks.add_task(_run_job, job_id, payload.query)
     return ResearchJobResponse(job_id=job_id, status="queued")
 
@@ -393,20 +413,26 @@ def research(
     description=(
         "Returns the current status of a job and, once ``completed``, its "
         "full research result (``failed`` jobs carry a safe ``error``). "
-        "Unknown or expired jobs return ``404``."
+        "Owner-scoped: another user's job is indistinguishable from a "
+        "nonexistent/expired job and returns ``404``."
     ),
     responses={
         200: {
             "description": "Job status; ``result``/``error`` present when terminal."
         },
-        404: {"description": "Job not found (unknown or expired)."},
+        401: {"description": "Not authenticated."},
+        404: {"description": "Job not found (unknown, expired, or another user's)."},
         500: {"description": "Internal server error."},
     },
 )
-def research_status(job_id: str) -> ResearchStatusResponse:
-    """Return the current status/result of a research job (404 if unknown)."""
+def research_status(
+    job_id: str,
+    current_user_id: Annotated[UUID, Depends(get_current_user_id)],
+) -> ResearchStatusResponse:
+    """Return the current status/result of a research job (404 if unknown
+    or owned by another user — never 403, to avoid revealing existence)."""
     _cleanup_expired_jobs()
-    job = store.get(job_id)
+    job = store.get(job_id, user_id=current_user_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
@@ -424,24 +450,30 @@ def research_status(job_id: str) -> ResearchStatusResponse:
     summary="Get job progress",
     description=(
         "Returns the live progress of a job: the most recent completed stage "
-        "(``current_step``) and the ordered ``completed_steps`` list. Unknown "
-        "or expired jobs return ``404``."
+        "(``current_step``) and the ordered ``completed_steps`` list. "
+        "Owner-scoped: another user's job is indistinguishable from a "
+        "nonexistent/expired job and returns ``404``."
     ),
     responses={
         200: {"description": "Live progress payload."},
-        404: {"description": "Job not found (unknown or expired)."},
+        401: {"description": "Not authenticated."},
+        404: {"description": "Job not found (unknown, expired, or another user's)."},
         500: {"description": "Internal server error."},
     },
 )
-def research_progress(job_id: str) -> ResearchProgressResponse:
-    """Return the live progress of a research job (404 if unknown).
+def research_progress(
+    job_id: str,
+    current_user_id: Annotated[UUID, Depends(get_current_user_id)],
+) -> ResearchProgressResponse:
+    """Return the live progress of a research job (404 if unknown or owned
+    by another user).
 
     ``current_step`` is the most recent logical stage reported as completed by
     the graph; ``completed_steps`` is an ordered event list (stages may repeat
     when the conditional research loop re-runs research).
     """
     _cleanup_expired_jobs()
-    job = store.get(job_id)
+    job = store.get(job_id, user_id=current_user_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return ResearchProgressResponse(
@@ -546,20 +578,26 @@ async def _job_event_stream(job_id: str) -> AsyncIterator[str]:
         "``GET /research/{job_id}/progress``: ``job_id``, ``status``, "
         "``current_step`` and ``completed_steps`` (``failed`` also adds "
         "``error``). The stream only observes the existing job state — it "
-        "never runs the research pipeline. Unknown or expired jobs return "
-        "``404``."
+        "never runs the research pipeline. Authentication and ownership are "
+        "checked before any event is streamed: another user's job is "
+        "indistinguishable from a nonexistent/expired job and returns ``404``."
     ),
     responses={
         200: {
             "description": "Server-Sent Events stream.",
             "content": {"text/event-stream": {}},
         },
-        404: {"description": "Job not found (unknown or expired)."},
+        401: {"description": "Not authenticated."},
+        404: {"description": "Job not found (unknown, expired, or another user's)."},
         500: {"description": "Internal server error."},
     },
 )
-async def research_stream(job_id: str) -> StreamingResponse:
-    """Stream Server-Sent Events for a research job (404 if unknown).
+async def research_stream(
+    job_id: str,
+    current_user_id: Annotated[UUID, Depends(get_current_user_id)],
+) -> StreamingResponse:
+    """Stream Server-Sent Events for a research job (404 if unknown or owned
+    by another user).
 
     The stream only observes the existing job state — it never runs the
     research pipeline. The final ``completed``/``failed`` event signals the end
@@ -567,7 +605,7 @@ async def research_stream(job_id: str) -> StreamingResponse:
     ``GET /research/{job_id}``.
     """
     _cleanup_expired_jobs()
-    job = store.get(job_id)
+    job = store.get(job_id, user_id=current_user_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return StreamingResponse(

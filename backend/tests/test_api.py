@@ -18,10 +18,22 @@ from fastapi.testclient import TestClient
 
 import backend.app.api as api
 import backend.app.main as main_mod
+from backend.app.auth.security import create_access_token
+from backend.app.core.config import settings
 
 # raise_server_exceptions=False ensures server exceptions surface as responses
 # instead of being re-raised through the test client.
 client = TestClient(api.app, raise_server_exceptions=False)
+
+# Phase 2F Step 4: every research endpoint now requires authentication. The
+# module-level client is authenticated as TEST_USER so the existing research
+# tests keep exercising the API behavior (unauthenticated 401 coverage lives
+# in test_authorization.py).
+TEST_USER_ID = uuid.uuid4()
+client.cookies.set(
+    settings.auth_cookie_name,
+    create_access_token(TEST_USER_ID),
+)
 
 REPRESENTATIVE_RESULT = {
     "query": "test query",
@@ -451,11 +463,13 @@ ALL_STAGES = [
 
 
 def _seed_job(status="queued", current_step=None, completed_steps=None, error=None):
-    """Insert a job directly through the job store (offline)."""
+    """Insert a job directly through the job store (offline), owned by the
+    authenticated test user."""
     job_id = str(uuid.uuid4())
     api.store.create(
         job_id=job_id,
         query="q",
+        user_id=TEST_USER_ID,
         status=status,
         error=error,
         current_step=current_step,
