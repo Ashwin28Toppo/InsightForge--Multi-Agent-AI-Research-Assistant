@@ -11,6 +11,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 from uuid import uuid4
@@ -18,7 +19,7 @@ from uuid import uuid4
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel, field_validator
 
-from backend.app.main import run_research_pipeline
+from backend.app.main import arun_research_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +70,16 @@ class ResearchStatusResponse(BaseModel):
 
 
 def _run_job(job_id: str, query: str) -> None:
-    """Background worker: run the existing pipeline and store the outcome.
+    """Background worker: run the async pipeline and store the outcome.
 
     Lifecycle: queued -> running -> completed, or -> failed on exception.
-    Exceptions are never swallowed silently — they are logged and surfaced on
-    the job record as a safe error string.
+
+    The async pipeline (``research_graph.ainvoke`` via
+    ``arun_research_pipeline``) runs in a dedicated event loop inside this
+    worker thread (``asyncio.run``), so the server's event loop is never
+    blocked by the long-running research. Exceptions are never swallowed
+    silently — they are logged and surfaced on the job record as a safe error
+    string.
     """
     with _lock:
         job = _jobs.get(job_id)
@@ -81,7 +87,7 @@ def _run_job(job_id: str, query: str) -> None:
             job["status"] = "running"
 
     try:
-        result = run_research_pipeline(query)
+        result = asyncio.run(arun_research_pipeline(query))
     except Exception as exc:
         logger.exception("research job %s failed", job_id)
         with _lock:

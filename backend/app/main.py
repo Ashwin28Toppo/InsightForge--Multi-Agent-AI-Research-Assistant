@@ -101,6 +101,19 @@ def run_research_pipeline(
     return _to_application_result(final_state)
 
 
+async def arun_research_pipeline(query: str) -> ResearchState:
+    """Async variant of ``run_research_pipeline`` for the API layer.
+
+    Invokes the compiled graph asynchronously (``research_graph.ainvoke``) so
+    a long research run never blocks the API event loop, and maps the final
+    state with the same result-conversion logic as the sync path. The graph
+    (``research_graph``) is the SAME compiled graph used by the sync path — no
+    second graph is created.
+    """
+    state = await research_graph.ainvoke({"query": query})
+    return _to_application_result(state)
+
+
 if __name__ == "__main__":
     topic = input("\n Enter a research topic : ")
     result = run_research_pipeline(topic)
