@@ -30,6 +30,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime
 from typing import Annotated, AsyncIterator, Literal
 from uuid import UUID, uuid4
 
@@ -312,6 +313,47 @@ class ResearchProgressResponse(BaseModel):
     )
 
 
+class ResearchHistoryItem(BaseModel):
+    """One entry in the authenticated user's research history.
+
+    Mirrors the existing research-job shape where possible (``job_id``,
+    ``status``, opaque ``result``, ``error``) plus the query and lifecycle
+    timestamps. ``user_id`` is intentionally never exposed.
+    """
+
+    job_id: str = Field(description="Unique identifier of the job.")
+    query: str = Field(description="The research query that created the job.")
+    status: Literal["queued", "running", "completed", "failed"] = Field(
+        description="Current lifecycle state of the job."
+    )
+    created_at: datetime = Field(description="When the job was created (UTC).")
+    updated_at: datetime = Field(description="When the job was last updated (UTC).")
+    current_step: str | None = Field(
+        default=None,
+        description="Most recent completed stage, or null before the first stage.",
+    )
+    completed_steps: list[str] = Field(
+        default_factory=list,
+        description="Ordered list of completed stages.",
+    )
+    result: dict | None = Field(
+        default=None,
+        description="Full research output (present only when ``status`` is ``completed``).",
+    )
+    error: str | None = Field(
+        default=None,
+        description="Safe error message (present only when ``status`` is ``failed``).",
+    )
+
+
+class ResearchHistoryResponse(BaseModel):
+    """The authenticated user's research history, newest first."""
+
+    jobs: list[ResearchHistoryItem] = Field(
+        description="The user's research jobs, ordered newest first."
+    )
+
+
 def _run_job(job_id: str, query: str) -> None:
     """Background worker: run the async streaming pipeline and store the outcome.
 
@@ -407,6 +449,50 @@ def research(
     store.create(job_id=job_id, query=payload.query, user_id=current_user_id)
     background_tasks.add_task(_run_job, job_id, payload.query)
     return ResearchJobResponse(job_id=job_id, status="queued")
+
+
+@app.get(
+    "/research/history",
+    response_model=ResearchHistoryResponse,
+    response_model_exclude_none=True,
+    summary="List the authenticated user's research history",
+    description=(
+        "Returns the authenticated user's research jobs, newest first "
+        "(``created_at`` descending). Owner-scoped: only the caller's own jobs "
+        "are ever returned and ``user_id`` is never exposed. Requires "
+        "authentication."
+    ),
+    responses={
+        200: {"description": "The user's research history (newest first)."},
+        401: {"description": "Not authenticated."},
+        500: {"description": "Internal server error."},
+    },
+)
+def research_history(
+    current_user_id: Annotated[UUID, Depends(get_current_user_id)],
+) -> ResearchHistoryResponse:
+    """Return the authenticated user's research history (newest first).
+
+    Registered BEFORE ``/research/{job_id}`` so ``history`` is never captured
+    as a job id. Only the caller's own jobs are returned.
+    """
+    jobs = store.list_by_user(current_user_id)
+    return ResearchHistoryResponse(
+        jobs=[
+            ResearchHistoryItem(
+                job_id=job.job_id,
+                query=job.query,
+                status=job.status,
+                created_at=job.created_at,
+                updated_at=job.updated_at,
+                current_step=job.current_step,
+                completed_steps=list(job.completed_steps or []),
+                result=job.result,
+                error=job.error,
+            )
+            for job in jobs
+        ]
+    )
 
 
 @app.get(

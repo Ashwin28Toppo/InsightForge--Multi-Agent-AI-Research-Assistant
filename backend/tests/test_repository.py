@@ -294,6 +294,44 @@ def test_lifecycle_transitions_preserve_owner():
     assert final.result == REPRESENTATIVE_RESULT
 
 
+# ── Owner-scoped history / listing (Phase 2F Step 6) ────────────────────────
+
+
+def test_list_by_user_returns_only_owned_jobs():
+    store = make_store()
+    store.create(job_id="job-a1", query="a1", user_id=USER_A)
+    store.create(job_id="job-a2", query="a2", user_id=USER_A)
+    store.create(job_id="job-b1", query="b1", user_id=USER_B)
+    store.create(job_id="job-x", query="x")  # no owner
+
+    for_a = store.list_by_user(USER_A)
+    for_b = store.list_by_user(USER_B)
+
+    assert sorted(j.job_id for j in for_a) == ["job-a1", "job-a2"]
+    assert [j.job_id for j in for_b] == ["job-b1"]
+
+
+def test_list_by_user_orders_newest_first():
+    clock = make_clock()
+    store = make_store(clock)
+    store.create(job_id="oldest", query="oldest", user_id=USER_A)
+    clock[0] += timedelta(seconds=10)
+    store.create(job_id="middle", query="middle", user_id=USER_A)
+    clock[0] += timedelta(seconds=10)
+    store.create(job_id="newest", query="newest", user_id=USER_A)
+
+    assert [j.job_id for j in store.list_by_user(USER_A)] == [
+        "newest",
+        "middle",
+        "oldest",
+    ]
+
+
+def test_list_by_user_empty():
+    store = make_store()
+    assert store.list_by_user(USER_A) == []
+
+
 # ── TTL cleanup ──────────────────────────────────────────────────────────────
 
 

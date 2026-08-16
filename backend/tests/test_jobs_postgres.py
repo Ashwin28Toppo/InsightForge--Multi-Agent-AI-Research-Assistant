@@ -208,3 +208,46 @@ def test_persists_across_store_instances(store, tmp_path):
         assert got.user_id == USER_A
     finally:
         asyncio.run(engine2.dispose())
+
+
+# ── Owner-scoped history (Phase 2F Step 6) ───────────────────────────────────
+
+
+def test_list_by_user_returns_only_owned_jobs(store):
+    store.create(JOB_1, "a1", user_id=USER_A)
+    store.create("22222222-2222-4222-8222-222222222222", "a2", user_id=USER_A)
+    store.create("33333333-3333-4333-8333-333333333333", "b1", user_id=USER_B)
+
+    for_a = store.list_by_user(USER_A)
+    for_b = store.list_by_user(USER_B)
+
+    assert len(for_a) == 2
+    assert all(j.user_id == USER_A for j in for_a)
+    assert {j.job_id for j in for_b} == {"33333333-3333-4333-8333-333333333333"}
+
+
+def test_list_by_user_orders_newest_first(store):
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    store.create(JOB_1, "oldest", user_id=USER_A, created_at=base)
+    store.create(
+        "22222222-2222-4222-8222-222222222222",
+        "newest",
+        user_id=USER_A,
+        created_at=base + timedelta(seconds=30),
+    )
+    store.create(
+        "33333333-3333-4333-8333-333333333333",
+        "middle",
+        user_id=USER_A,
+        created_at=base + timedelta(seconds=15),
+    )
+
+    assert [j.query for j in store.list_by_user(USER_A)] == [
+        "newest",
+        "middle",
+        "oldest",
+    ]
+
+
+def test_list_by_user_empty(store):
+    assert store.list_by_user(USER_A) == []

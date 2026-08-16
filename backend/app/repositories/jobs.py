@@ -139,6 +139,14 @@ class JobStore(ABC):
         """Return snapshots of all jobs (iteration for cleanup/scanning)."""
 
     @abstractmethod
+    def list_by_user(self, user_id: UUID) -> list[JobRecord]:
+        """Return snapshots of all jobs owned by ``user_id``, newest first.
+
+        This is the owner-scoped history/list operation: only the given user's
+        jobs are ever returned, and never another user's.
+        """
+
+    @abstractmethod
     def cleanup_expired(self, ttl_seconds: int, now: datetime | None = None) -> int:
         """Remove terminal jobs older than ``ttl_seconds``; return count removed.
 
@@ -260,6 +268,21 @@ class InMemoryJobStore(JobStore):
     def list(self) -> list[JobRecord]:
         with self._lock:
             return [self._snapshot(r) for r in self._jobs.values()]
+
+    def list_by_user(self, user_id: UUID) -> list[JobRecord]:
+        with self._lock:
+            records = [
+                self._snapshot(record)
+                for record in self._jobs.values()
+                if record.user_id == user_id
+            ]
+        # Newest first (stable for equal timestamps via insertion order).
+        records.sort(
+            key=lambda r: r.created_at
+            or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        return records
 
     def cleanup_expired(
         self, ttl_seconds: int, now: datetime | None = None

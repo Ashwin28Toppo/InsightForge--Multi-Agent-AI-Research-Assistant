@@ -170,6 +170,9 @@ class PostgresJobStore(JobStore):
     def list(self) -> list[JobRecord]:
         return self._bridge.call(self._list())
 
+    def list_by_user(self, user_id: UUID) -> list[JobRecord]:
+        return self._bridge.call(self._list_by_user(user_id))
+
     def cleanup_expired(
         self, ttl_seconds: int, now: datetime | None = None
     ) -> int:
@@ -268,6 +271,16 @@ class PostgresJobStore(JobStore):
     async def _list(self) -> list[JobRecord]:
         async with self._new_session() as session:
             rows = (await session.execute(select(ResearchJob))).scalars().all()
+        return [self._record(row) for row in rows]
+
+    async def _list_by_user(self, user_id: UUID) -> list[JobRecord]:
+        stmt = (
+            select(ResearchJob)
+            .where(ResearchJob.user_id == user_id)
+            .order_by(ResearchJob.created_at.desc())
+        )
+        async with self._new_session() as session:
+            rows = (await session.execute(stmt)).scalars().all()
         return [self._record(row) for row in rows]
 
     async def _cleanup_expired(
