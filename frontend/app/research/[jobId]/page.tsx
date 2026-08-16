@@ -1,90 +1,153 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import AppShell from "@/components/layout/AppShell";
-import ProgressTimeline from "@/components/progress/ProgressTimeline";
+import ProgressTimeline, { ProgressStage } from "@/components/progress/ProgressTimeline";
 import ReportViewer from "@/components/report/ReportViewer";
 import TraceabilityRail from "@/components/layout/TraceabilityRail";
 import StatusBadge from "@/components/ui/StatusBadge";
-import { Clock, Info, RefreshCw, Plus } from "lucide-react";
+import Skeleton from "@/components/feedback/Skeleton";
+import { useResearchStream } from "@/hooks/useResearchStream";
+import { useResearchJob } from "@/hooks/useResearchJob";
+import { submitResearch } from "@/lib/api/research";
+import { apiErrorMessage } from "@/lib/utils/errors";
+import { saveHistoryItem } from "@/lib/history/store";
+import { PIPELINE_STAGES } from "@/lib/mock/research";
 import {
-  PIPELINE_STAGES,
-  BATTERIES_RESULT,
-  runMockResearch,
-} from "@/lib/mock/research";
+  Clock,
+  Info,
+  RefreshCw,
+  Plus,
+  Radio,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
 import type { RailTab } from "@/components/layout/TraceabilityRail";
 
-type DemoStatus = "running" | "completed" | "failed";
+const formatTime = (sec: number) => {
+  const mins = Math.floor(sec / 60);
+  const secs = sec % 60;
+  return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+};
+
+const getLastQuery = () => {
+  if (typeof window === "undefined") return "";
+  return sessionStorage.getItem("insightforge-last-query") || "";
+};
 
 export default function ResearchWorkspace() {
   const params = useParams();
   const router = useRouter();
-  const jobId = (params?.jobId as string) || "unknown";
+  const jobId = (params?.jobId as string) || "";
 
-  const [status, setStatus] = useState<DemoStatus>("running");
-  const [currentStep, setCurrentStep] = useState<string | null>("plan");
-  const [completedSteps, setCompletedSteps] = useState<string[]>([]);
-  const [elapsed, setElapsed] = useState(0);
+  // Gate the stream off once the job is known to be missing/expired so the
+  // SSE + progress fallback stop (no pointless reconnects or polling).
+  const job = useResearchJob(jobId || null);
+  const stream = useResearchStream(job.notFound ? null : jobId || null);
+
   const [railTab, setRailTab] = useState<RailTab>("citations");
   const [activeCitation, setActiveCitation] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
-  // Elapsed timer while running
+  const startRef = useRef<number | null>(null);
+  const terminalHandledRef = useRef(false);
+  const savedRef = useRef(false);
+  const [lastQuery, setLastQuery] = useState<string>("");
+
+  // Read the submitted query from sessionStorage post-hydration (client-only
+  // value must not be read during render — that would cause a hydration
+  // mismatch).
   useEffect(() => {
-    if (status !== "running") return;
-    const interval = setInterval(() => setElapsed((prev) => prev + 1), 1000);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- client-only sessionStorage read must happen after hydration
+    setLastQuery(getLastQuery());
+  }, []);
+
+  const status = job.notFound ? "failed" : stream.status;
+
+  // Elapsed timer while the job is active.
+  useEffect(() => {
+    if (job.notFound) return;
+    const active = stream.status === "queued" || stream.status === "running";
+    if (!active) return;
+    if (startRef.current === null) startRef.current = Date.now();
+    const interval = setInterval(() => {
+      if (startRef.current !== null) {
+        setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+      }
+    }, 1000);
     return () => clearInterval(interval);
-  }, [status]);
+  }, [stream.status, job.notFound]);
 
-  // Start (or restart) the demo run — event-driven, not effect-driven.
-  const startRunning = () => {
-    setCurrentStep("plan");
-    setCompletedSteps([]);
-    setElapsed(0);
-    setRailTab("citations");
-    setStatus("running");
-  };
-
-  // Simulate the pipeline running over the dynamic stage list.
-  // State updates here happen inside async callbacks (interval + promise),
-  // which the react-hooks rules permit.
+  // On a terminal SSE event, hydrate the final result / authoritative error.
   useEffect(() => {
-    if (status !== "running") return;
-    let cancelled = false;
-    const completed: string[] = [];
+    if (stream.isTerminal && !terminalHandledRef.current) {
+      terminalHandledRef.current = true;
+      // Defer to a microtask so no setState runs synchronously in the effect.
+      void Promise.resolve().then(() => job.refresh());
+    }
+  }, [stream.isTerminal, job]);
 
-    const run = runMockResearch(
-      BATTERIES_RESULT.query || "research",
-      (step) => {
-        if (cancelled) return;
-        setCurrentStep(step);
-        completed.push(step);
-        setCompletedSteps([...completed]);
-      },
-      850
-    );
-
-    run.then(() => {
-      if (!cancelled) setStatus("completed");
+  // Save a local snapshot once a completed result is available.
+  useEffect(() => {
+    if (!job.result || stream.status !== "completed" || savedRef.current) {
+      return;
+    }
+    savedRef.current = true;
+    saveHistoryItem({
+      jobId,
+      query: job.result.query || lastQuery || "Research inquiry",
+      status: "completed",
+      confidence: job.result.confidence,
+      reportSnippet: job.result.report ? job.result.report.slice(0, 240) : undefined,
+      duration: formatTime(elapsed),
+      resultSnapshot: job.result,
     });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [status, jobId]);
-
-  const formatTime = (sec: number) => {
-    const mins = Math.floor(sec / 60);
-    const secs = sec % 60;
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-  };
+  }, [job.result, stream.status, jobId, elapsed, lastQuery]);
 
   const handleCitationRef = (index: number) => {
     setActiveCitation(index);
     setRailTab("citations");
   };
 
-  const retry = startRunning;
+  // Retry creates a NEW research job only when the user explicitly asks.
+  const retry = async () => {
+    if (retrying) return;
+    const query = lastQuery || job.result?.query || "";
+    if (!query) {
+      setRetryError("No query is available to retry — start a new inquiry.");
+      return;
+    }
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      const res = await submitResearch(query);
+      sessionStorage.setItem("insightforge-last-query", query);
+      router.push(`/research/${res.job_id}`);
+    } catch (err) {
+      setRetryError(apiErrorMessage(err));
+      setRetrying(false);
+    }
+  };
+
+  // Timeline stages: the known pipeline plus any extra keys the backend may
+  // surface (loop repeats are handled positionally by completedSteps length).
+  const knownKeys = new Set(PIPELINE_STAGES.map((s) => s.key));
+  const extraStages: ProgressStage[] = stream.completedSteps
+    .filter((key) => !knownKeys.has(key))
+    .map((key) => ({ key, label: key }));
+  const stages: ProgressStage[] = [...PIPELINE_STAGES, ...extraStages];
+
+  const connectionLabel =
+    stream.connection === "open"
+      ? "Live stream"
+      : stream.connection === "reconnecting"
+        ? `Reconnecting… (${stream.reconnectAttempt})`
+        : stream.connection === "closed"
+          ? "Stream closed"
+          : "Connecting…";
 
   return (
     <AppShell>
@@ -95,147 +158,183 @@ export default function ResearchWorkspace() {
             JOB: {jobId.slice(0, 24)}
           </span>
           <StatusBadge status={status} />
-          <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground">
-            <Clock size={11} />
-            {formatTime(elapsed)}
-          </span>
+          {(stream.status === "queued" || stream.status === "running") && (
+            <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground">
+              <Clock size={11} />
+              {formatTime(elapsed)}
+            </span>
+          )}
         </div>
 
-        {/* Demo state control (mock phase only) */}
-        <div
-          className="flex items-center gap-1 p-1 rounded-lg bg-muted border border-border"
-          role="group"
-          aria-label="Preview research state"
+        {!job.notFound && (
+        <span
+          className={`inline-flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider select-none
+            ${stream.connection === "open" ? "text-success" : stream.connection === "reconnecting" ? "text-warning" : "text-muted-foreground"}`}
+          title="SSE connection state"
         >
-          {(
-            [
-              { key: "running", label: "Running" },
-              { key: "completed", label: "Report" },
-              { key: "failed", label: "Failed" },
-            ] as { key: DemoStatus; label: string }[]
-          ).map((option) => (
-            <button
-              key={option.key}
-              type="button"
-              onClick={() =>
-                option.key === "running" ? startRunning() : setStatus(option.key)
-              }
-              className={`px-2.5 py-1 rounded-md text-[10px] font-mono font-bold uppercase tracking-wider cursor-pointer transition-all
-                ${status === option.key
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-                }`}
-              aria-pressed={status === option.key}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
+          {stream.connection === "open" ? (
+            <Wifi size={11} />
+          ) : stream.connection === "reconnecting" ? (
+            <Radio size={11} />
+          ) : (
+            <WifiOff size={11} />
+          )}
+          {connectionLabel}
+        </span>
+        )}
       </div>
 
-      {/* Main workspace frame */}
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0">
-        {/* Primary column */}
-        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
-          <div className="space-y-3">
-            <h1 className="text-lg md:text-xl font-bold tracking-tight text-foreground leading-relaxed">
-              “{BATTERIES_RESULT.query}”
-            </h1>
+      {/* Not found / expired */}
+      {job.notFound ? (
+        <div className="flex-1 flex items-center justify-center px-6 py-12">
+          <div className="max-w-md w-full bg-card border border-border rounded-xl p-8 text-center space-y-4">
+            <div className="h-12 w-12 rounded-full bg-muted border border-border flex items-center justify-center text-muted-foreground mx-auto">
+              <Info size={24} />
+            </div>
+            <h2 className="text-base font-bold font-syne text-foreground">
+              Research job not found
+            </h2>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              This job does not exist or has expired (terminal jobs are cleaned
+              up after a short retention window). Start a new inquiry.
+            </p>
+            <div className="pt-2 flex justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => router.push("/")}
+                className="flex items-center gap-1.5 px-4 py-2 bg-primary text-primary-foreground font-semibold text-xs rounded-lg hover:bg-primary/95 cursor-pointer transition-all"
+              >
+                <Plus size={13} />
+                <span>New Inquiry</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0">
+          {/* Primary column */}
+          <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
+            <div className="space-y-3">
+              <h1 className="text-lg md:text-xl font-bold tracking-tight text-foreground leading-relaxed">
+                “{job.result?.query || lastQuery || "Research inquiry"}”
+              </h1>
+            </div>
+
+            {/* QUEUED / RUNNING */}
+            {(stream.status === "queued" || stream.status === "running") && (
+              <div className="space-y-6">
+                <ProgressTimeline
+                  stages={stages}
+                  currentStep={stream.currentStep}
+                  completedSteps={stream.completedSteps}
+                />
+                {stream.status === "queued" && (
+                  <p className="text-xs text-muted-foreground">
+                    Job queued — the research worker is starting.
+                  </p>
+                )}
+                {/* Report skeleton while the pipeline runs */}
+                <div
+                  className="bg-card border border-border rounded-xl p-6 space-y-6 animate-pulse"
+                  aria-hidden="true"
+                >
+                  <div className="h-6 bg-border rounded-md w-1/3" />
+                  <div className="space-y-3">
+                    <div className="h-4 bg-border rounded-md w-full" />
+                    <div className="h-4 bg-border rounded-md w-11/12" />
+                    <div className="h-4 bg-border rounded-md w-10/12" />
+                  </div>
+                  <div className="space-y-3">
+                    <div className="h-4 bg-border rounded-md w-full" />
+                    <div className="h-4 bg-border rounded-md w-8/12" />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* COMPLETED */}
+            {stream.status === "completed" &&
+              (job.loading && !job.result ? (
+                <div className="bg-card border border-border rounded-xl p-6 space-y-6">
+                  <Skeleton lines={4} />
+                </div>
+              ) : job.result ? (
+                <ReportViewer
+                  report={job.result.report || ""}
+                  confidence={job.result.confidence}
+                  meta={{
+                    elapsed: formatTime(elapsed),
+                    sourceCount: job.result.sources?.length,
+                    citationCount: job.result.citations?.length,
+                    claimCount: job.result.claims?.length,
+                    factCheckCount: job.result.fact_checks?.length,
+                    criticScore: job.result.critic_score ?? null,
+                  }}
+                  onCitationRef={handleCitationRef}
+                />
+              ) : (
+                <div className="bg-card border border-border rounded-xl p-8 text-center space-y-3">
+                  <p className="text-sm font-semibold text-foreground">
+                    Research completed
+                  </p>
+                  <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                    The pipeline finished but returned no report content.
+                  </p>
+                </div>
+              ))}
+
+            {/* FAILED */}
+            {stream.status === "failed" && (
+              <div className="bg-card border border-destructive/20 bg-destructive/5 rounded-xl p-8 text-center space-y-4 max-w-xl mx-auto my-12">
+                <div className="h-12 w-12 rounded-full bg-destructive/10 border border-destructive/30 flex items-center justify-center text-destructive mx-auto">
+                  <Info size={24} />
+                </div>
+                <h2 className="text-base font-bold font-syne text-foreground">
+                  Research Pipeline Failed
+                </h2>
+                <p className="text-xs text-muted-foreground leading-relaxed max-w-md mx-auto">
+                  {stream.error || job.error || "The research job failed."}
+                </p>
+                {retryError && (
+                  <p className="text-xs text-destructive">{retryError}</p>
+                )}
+                <div className="pt-2 flex justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={retry}
+                    disabled={retrying}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-primary text-primary-foreground font-semibold text-xs rounded-lg hover:bg-primary/95 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                  >
+                    <RefreshCw size={13} className={retrying ? "animate-spin" : ""} />
+                    <span>{retrying ? "Submitting…" : "Retry Pipeline"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => router.push("/")}
+                    className="flex items-center gap-1.5 px-4 py-2 border border-border hover:border-border-strong text-muted-foreground hover:text-foreground font-semibold text-xs rounded-lg cursor-pointer transition-all"
+                  >
+                    <Plus size={13} />
+                    <span>New Inquiry</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* RUNNING */}
-          {status === "running" && (
-            <div className="space-y-6">
-              <ProgressTimeline
-                stages={PIPELINE_STAGES}
-                currentStep={currentStep}
-                completedSteps={completedSteps}
-              />
-              {/* Report skeleton while pipeline runs */}
-              <div
-                className="bg-card border border-border rounded-xl p-6 space-y-6 animate-pulse"
-                aria-hidden="true"
-              >
-                <div className="h-6 bg-border rounded-md w-1/3" />
-                <div className="space-y-3">
-                  <div className="h-4 bg-border rounded-md w-full" />
-                  <div className="h-4 bg-border rounded-md w-11/12" />
-                  <div className="h-4 bg-border rounded-md w-10/12" />
-                </div>
-                <div className="space-y-3">
-                  <div className="h-4 bg-border rounded-md w-full" />
-                  <div className="h-4 bg-border rounded-md w-8/12" />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* COMPLETED */}
-          {status === "completed" && (
-            <ReportViewer
-              report={BATTERIES_RESULT.report || ""}
-              confidence={BATTERIES_RESULT.confidence}
-              meta={{
-                elapsed: formatTime(elapsed),
-                sourceCount: BATTERIES_RESULT.sources?.length,
-                citationCount: BATTERIES_RESULT.citations?.length,
-                claimCount: BATTERIES_RESULT.claims?.length,
-                factCheckCount: BATTERIES_RESULT.fact_checks?.length,
-                criticScore: BATTERIES_RESULT.critic_score ?? null,
-              }}
-              onCitationRef={handleCitationRef}
-            />
-          )}
-
-          {/* FAILED */}
-          {status === "failed" && (
-            <div className="bg-card border border-destructive/20 bg-destructive/5 rounded-xl p-8 text-center space-y-4 max-w-xl mx-auto my-12">
-              <div className="h-12 w-12 rounded-full bg-destructive/10 border border-destructive/30 flex items-center justify-center text-destructive mx-auto">
-                <Info size={24} />
-              </div>
-              <h2 className="text-base font-bold font-syne text-foreground">
-                Research Pipeline Interrupted
-              </h2>
-              <p className="text-xs text-muted-foreground leading-relaxed max-w-md mx-auto">
-                The agent pipeline encountered a rate limit restriction during
-                the web research stage (Groq TPM budget exceeded for
-                llama-3.1-8b-instant). No partial report was produced.
-              </p>
-              <div className="pt-2 flex justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={retry}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-primary text-primary-foreground font-semibold text-xs rounded-lg hover:bg-primary/95 cursor-pointer shadow-md shadow-primary/10 transition-all"
-                >
-                  <RefreshCw size={13} />
-                  <span>Retry Pipeline</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => router.push("/")}
-                  className="flex items-center gap-1.5 px-4 py-2 border border-border hover:border-border-strong text-muted-foreground hover:text-foreground font-semibold text-xs rounded-lg cursor-pointer transition-all"
-                >
-                  <Plus size={13} />
-                  <span>New Inquiry</span>
-                </button>
-              </div>
-            </div>
-          )}
+          {/* Traceability rail */}
+          <TraceabilityRail
+            sources={job.result?.sources}
+            evidence={job.result?.evidence}
+            citations={job.result?.citations}
+            factChecks={job.result?.fact_checks}
+            claims={job.result?.claims}
+            activeCitation={activeCitation}
+            onSelectCitation={handleCitationRef}
+            activeTab={railTab}
+            onTabChange={setRailTab}
+          />
         </div>
-
-        {/* Traceability rail */}
-        <TraceabilityRail
-          sources={BATTERIES_RESULT.sources}
-          evidence={BATTERIES_RESULT.evidence}
-          citations={BATTERIES_RESULT.citations}
-          factChecks={BATTERIES_RESULT.fact_checks}
-          claims={BATTERIES_RESULT.claims}
-          activeCitation={activeCitation}
-          onSelectCitation={handleCitationRef}
-          activeTab={railTab}
-          onTabChange={setRailTab}
-        />
-      </div>
+      )}
     </AppShell>
   );
 }

@@ -1,30 +1,61 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import AppShell from "@/components/layout/AppShell";
 import ResearchComposer from "@/components/research/ResearchComposer";
-import { PIPELINE_STAGES, MOCK_HISTORY } from "@/lib/mock/research";
+import { submitResearch } from "@/lib/api/research";
+import { apiErrorMessage } from "@/lib/utils/errors";
+import { getHistory } from "@/lib/history/store";
+import { PIPELINE_STAGES } from "@/lib/mock/research";
 import { ArrowRight, Clock, ShieldCheck } from "lucide-react";
+
+interface RecentItem {
+  jobId: string;
+  query: string;
+  date: string;
+  duration?: string;
+}
 
 export default function Home() {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [recent, setRecent] = useState<RecentItem[]>([]);
+  const submittingRef = useRef(false);
 
-  const handleResearchSubmit = (query: string) => {
+  // Load recent completed research from the local history store (client-only).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- client-only localStorage read must happen after hydration
+    setRecent(
+      getHistory()
+        .filter((h) => h.status === "completed")
+        .slice(0, 3)
+        .map((h) => ({
+          jobId: h.jobId,
+          query: h.query,
+          date: h.completedAt,
+          duration: h.duration,
+        }))
+    );
+  }, []);
+
+  const handleResearchSubmit = async (query: string) => {
+    // Prevent accidental duplicate submissions (backend has no idempotency key).
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setIsLoading(true);
-    // Mock phase: generate a mock job id and navigate to the workspace.
-    const tag =
-      query.trim().toLowerCase().replace(/\s+/g, "-").slice(0, 24) || "inquiry";
-    const mockJobId = `mock-${tag}-${Math.floor(Math.random() * 100000)}`;
-    setTimeout(() => {
-      router.push(`/research/${mockJobId}`);
-    }, 800);
+    setSubmitError(null);
+    try {
+      const res = await submitResearch(query);
+      sessionStorage.setItem("insightforge-last-query", query);
+      router.push(`/research/${res.job_id}`);
+    } catch (err) {
+      setSubmitError(apiErrorMessage(err));
+      setIsLoading(false);
+      submittingRef.current = false;
+    }
   };
-
-  const recentCompleted = MOCK_HISTORY.filter(
-    (item) => item.status === "completed"
-  ).slice(0, 3);
 
   return (
     <AppShell>
@@ -72,7 +103,11 @@ export default function Home() {
             <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-muted-foreground">
               Initiate Inquiry
             </h2>
-            <ResearchComposer onSubmit={handleResearchSubmit} isLoading={isLoading} />
+            <ResearchComposer
+              onSubmit={handleResearchSubmit}
+              isLoading={isLoading}
+              externalError={submitError}
+            />
           </div>
         </section>
 
@@ -108,7 +143,7 @@ export default function Home() {
           </ol>
         </section>
 
-        {/* Recent research */}
+        {/* Recent research (from local history) */}
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-muted-foreground">
@@ -124,9 +159,9 @@ export default function Home() {
             </button>
           </div>
 
-          {recentCompleted.length > 0 ? (
+          {recent.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {recentCompleted.map((item) => (
+              {recent.map((item) => (
                 <div
                   key={item.jobId}
                   onClick={() => router.push(`/research/${item.jobId}`)}
@@ -138,14 +173,18 @@ export default function Home() {
                   <div className="flex items-center justify-between text-[10px] text-muted-foreground font-mono">
                     <span>{item.date}</span>
                     <span className="inline-flex items-center gap-1">
-                      <Clock size={10} />
-                      {item.duration}
+                      <Clock size={11} />
+                      {item.duration || "—"}
                     </span>
                   </div>
                 </div>
               ))}
             </div>
-          ) : null}
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              No research yet — completed runs will appear here.
+            </p>
+          )}
         </section>
       </div>
     </AppShell>

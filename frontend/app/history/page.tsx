@@ -7,8 +7,7 @@ import HistoryItem, { HistoryItemView } from "@/components/history/HistoryItem";
 import EmptyState from "@/components/feedback/EmptyState";
 import Skeleton from "@/components/feedback/Skeleton";
 import { History, Search } from "lucide-react";
-import { getHistory, deleteHistoryItem, saveHistoryItem } from "@/lib/history/store";
-import { MOCK_HISTORY } from "@/lib/mock/research";
+import { getHistory, deleteHistoryItem } from "@/lib/history/store";
 
 type StatusFilter = "all" | "completed" | "failed";
 
@@ -18,25 +17,9 @@ export default function HistoryPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
-  // Load once (post-hydration — localStorage is client-only) and seed the
-  // store from mock data on first visit. The read must happen in an effect
-  // to avoid SSR/hydration mismatches; the rule below is a recognized
-  // exception for client-only external stores.
+  // Load once (post-hydration — localStorage is client-only). Records are
+  // written by the research workspace when jobs reach a terminal state.
   useEffect(() => {
-    const existing = getHistory();
-    if (existing.length === 0) {
-      // Seed mock history so the visual foundation has content.
-      MOCK_HISTORY.forEach((record) => {
-        saveHistoryItem({
-          jobId: record.jobId,
-          query: record.query,
-          status: record.status,
-          confidence: record.confidence,
-          reportSnippet: record.snippet,
-          duration: record.duration,
-        });
-      });
-    }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- client-only localStorage read must happen after hydration
     setItems(
       getHistory().map((h) => ({

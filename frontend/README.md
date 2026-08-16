@@ -3,20 +3,29 @@
 The Phase 2E frontend for the InsightForge multi-agent research workstation.
 Next.js (App Router) + TypeScript + Tailwind CSS v4.
 
-> **Status: visual foundation (mock data).** This stage uses realistic mock
-> data and local UI state. Real FastAPI integration (POST `/research`, SSE,
-> etc.) is the next stage — the API/SSE layer is already scaffolded in
-> `lib/api` and `lib/sse` with typed contracts in `lib/types/api.ts`.
+> **Status: real FastAPI integration.** The frontend talks to the FastAPI
+> backend over HTTP (`POST /research`, status, progress) and Server-Sent
+> Events (`/research/{job_id}/stream`) with reconnection + a polling fallback.
+> Completed research is archived to localStorage. Mock data in `lib/mock`
+> remains available but is **not** used by the default app paths.
 
 ## Getting started
 
-```bash
-npm install
-npm run dev        # http://localhost:3000
-npm run lint       # eslint (must be clean)
-npm run build      # production build
-npm run start      # serve the production build
-```
+1. Start the FastAPI backend (see the repo root README):
+   ```bash
+   cd ..   # repo root
+   .venv/Scripts/python.exe -m uvicorn backend.app.api:app --host 127.0.0.1 --port 8000
+   ```
+2. Frontend (backend base URL via `NEXT_PUBLIC_API_BASE_URL`, defaults to
+   `http://127.0.0.1:8000`):
+   ```bash
+   npm install
+   npm run dev        # http://localhost:3000
+   npm run lint       # eslint (must be clean)
+   npm run build      # production build
+   npm run start      # serve the production build
+   ```
+   Copy `frontend/.env.example` to `.env.local` to override the base URL.
 
 ## Routes
 
@@ -62,8 +71,22 @@ hooks/                  # useHealth, useResearchJob, useResearchStream
 
 ## Backend
 
-The FastAPI backend lives at `../backend` and is **read-only** for this task.
-See the API contract in `lib/types/api.ts` and the handoff docs at the repo
-root (`API_FOR_FRONTEND.md`). When the next stage wires real integration,
-swap the mock stubs in `lib/api/*` and `lib/sse/*` for the real calls (the
-intended implementations are documented as comments in those files).
+The FastAPI backend lives at `../backend` and is **read-only** for frontend
+work. See the API contract in `lib/types/api.ts` and the handoff docs at the
+repo root (`API_FOR_FRONTEND.md`).
+
+### Integration notes
+
+- `lib/api/client.ts` — shared fetch wrapper (base URL, JSON, `X-Request-ID`,
+  typed `ApiError` exposing the server request id).
+- `lib/api/research.ts` / `lib/api/health.ts` — typed endpoint functions.
+- `lib/sse/research-stream.ts` — native `EventSource` client with exponential
+  backoff reconnection (never creates a new job), terminal-event handling,
+  and a max-attempt cap that falls back to polling.
+- `hooks/useResearchStream.ts` — SSE + progress-poll fallback (polling only
+  when the stream is not open), stops at terminal/404.
+- `hooks/useResearchJob.ts` — status/result fetch + `refresh()`; result is
+  normalized by `lib/utils/normalize.ts` (defensive, never crashes on missing
+  fields).
+- History: `lib/history/store.ts` (localStorage) is written on completion and
+  read by `/history`, `/history/[jobId]`, and the home page.

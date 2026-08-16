@@ -6,9 +6,15 @@ import { ArrowRight, Sparkles, SlidersHorizontal, BookOpen, AlertCircle } from "
 interface ResearchComposerProps {
   onSubmit: (query: string) => void;
   isLoading?: boolean;
+  /** Server/API-level error to display inside the composer (e.g. 422, offline). */
+  externalError?: string | null;
 }
 
-export default function ResearchComposer({ onSubmit, isLoading = false }: ResearchComposerProps) {
+export default function ResearchComposer({
+  onSubmit,
+  isLoading = false,
+  externalError = null,
+}: ResearchComposerProps) {
   const [query, setQuery] = useState("");
   const [deepSearch, setDeepSearch] = useState(false);
   const [corpus, setCorpus] = useState("all");
@@ -156,11 +162,14 @@ export default function ResearchComposer({ onSubmit, isLoading = false }: Resear
         </div>
       )}
 
-      {/* Error message */}
-      {error && (
-        <div className="flex items-center gap-2 text-xs text-destructive bg-destructive/5 border border-destructive/20 p-2.5 rounded-lg">
-          <AlertCircle size={14} />
-          <span>{error}</span>
+      {/* Error message — local validation or server/API error */}
+      {(error || externalError) && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 text-xs text-destructive bg-destructive/5 border border-destructive/20 p-2.5 rounded-lg"
+        >
+          <AlertCircle size={14} className="mt-0.5 shrink-0" />
+          <span>{error || externalError}</span>
         </div>
       )}
     </form>

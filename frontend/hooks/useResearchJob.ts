@@ -1,50 +1,65 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { getJobStatus } from "../lib/api/research";
-import { ResearchResult, JobStatus } from "../lib/types/api";
+import { normalizeResearchResult } from "../lib/utils/normalize";
+import { apiErrorMessage } from "../lib/utils/errors";
+import type { ResearchResult, JobStatus } from "../lib/types/api";
 
+/**
+ * Job status/result. Fetches on mount and exposes refresh() — the workspace
+ * calls refresh() when the SSE stream reports a terminal state to hydrate
+ * the final result (or the authoritative error).
+ */
 export function useResearchJob(jobId: string | null) {
   const [status, setStatus] = useState<JobStatus>("queued");
   const [result, setResult] = useState<ResearchResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [notFound, setNotFound] = useState(false);
+  const [requestId, setRequestId] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!jobId) return;
+    setLoading(true);
+    try {
+      const res = await getJobStatus(jobId);
+      setStatus(res.status);
+      setNotFound(false);
+      if (res.status === "failed") {
+        setError(res.error || "Research job failed");
+      } else if (res.status === "completed") {
+        setError(null);
+        setResult(res.result ? normalizeResearchResult(res.result) : null);
+      }
+    } catch (err) {
+      const apiError = err as { status?: number; requestId?: string | null };
+      if (apiError.status === 404) {
+        setNotFound(true);
+        setError("Research job not found or expired.");
+      } else {
+        setError(apiErrorMessage(err));
+      }
+      setRequestId(apiError.requestId ?? null);
+    } finally {
+      setLoading(false);
+    }
+  }, [jobId]);
 
   useEffect(() => {
     if (!jobId) return;
-    // Capture in a const so TypeScript narrows it inside the async closure.
-    const id = jobId;
-    let cancelled = false;
+    // Defer to a microtask so no setState runs synchronously in the effect.
+    void Promise.resolve().then(() => refresh());
+  }, [jobId, refresh]);
 
-    async function fetchJob() {
-      setLoading(true);
-      try {
-        const res = await getJobStatus(id);
-        if (cancelled) return;
-        setStatus(res.status);
-        if (res.result) {
-          setResult(res.result);
-        }
-        if (res.error) {
-          setError(res.error);
-        }
-      } catch (err) {
-        if (cancelled) return;
-        setError(
-          err instanceof Error ? err.message : "Failed to fetch research job status"
-        );
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    }
-
-    fetchJob();
-    return () => {
-      cancelled = true;
-    };
-  }, [jobId]);
-
-  return { status, result, error, loading };
+  return {
+    status,
+    result,
+    error,
+    loading,
+    notFound,
+    requestId,
+    refresh,
+    isTerminal: status === "completed" || status === "failed",
+  };
 }

@@ -13,14 +13,24 @@ import {
   ChevronRight,
 } from "lucide-react";
 import BottomTabBar from "./BottomTabBar";
+import { useHealth } from "@/hooks/useHealth";
 
 interface AppShellProps {
   children: React.ReactNode;
+  /** Optional override (e.g. error pages); defaults to the live /health check. */
   healthStatus?: "online" | "offline" | "checking";
 }
 
-export default function AppShell({ children, healthStatus = "online" }: AppShellProps) {
+const HEALTH_LABELS: Record<string, string> = {
+  online: "Connected",
+  checking: "Checking",
+  offline: "Unavailable",
+};
+
+export default function AppShell({ children, healthStatus }: AppShellProps) {
   const pathname = usePathname();
+  const { healthStatus: liveHealth } = useHealth();
+  const status = healthStatus ?? liveHealth;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -150,17 +160,32 @@ export default function AppShell({ children, healthStatus = "online" }: AppShell
 
           {/* Header Action / Health Badge */}
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-border bg-card text-xs font-medium">
-              <span className={`h-2 w-2 rounded-full relative flex`}>
-                <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                  healthStatus === "online" ? "animate-ping bg-success" : healthStatus === "checking" ? "animate-ping bg-warning" : "bg-destructive"
-                }`}></span>
-                <span className={`relative inline-flex rounded-full h-2 w-2 ${
-                  healthStatus === "online" ? "bg-success" : healthStatus === "checking" ? "bg-warning" : "bg-destructive"
-                }`}></span>
+            <div
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-border bg-card text-xs font-medium"
+              title={status === "offline" ? "Backend unreachable — research submissions will fail" : undefined}
+            >
+              <span className="h-2 w-2 rounded-full relative flex">
+                <span
+                  className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                    status === "online"
+                      ? "animate-ping bg-success"
+                      : status === "checking"
+                        ? "animate-ping bg-warning"
+                        : "bg-destructive"
+                  }`}
+                />
+                <span
+                  className={`relative inline-flex rounded-full h-2 w-2 ${
+                    status === "online"
+                      ? "bg-success"
+                      : status === "checking"
+                        ? "bg-warning"
+                        : "bg-destructive"
+                  }`}
+                />
               </span>
               <span className="font-mono text-[10px] uppercase text-muted-foreground select-none">
-                Service: {healthStatus}
+                Service: {HEALTH_LABELS[status] ?? status}
               </span>
             </div>
           </div>

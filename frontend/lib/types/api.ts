@@ -1,5 +1,16 @@
 export type JobStatus = "queued" | "running" | "completed" | "failed";
 
+/** Connection state of the SSE stream. */
+export type ConnectionState = "connecting" | "open" | "reconnecting" | "closed";
+
+export interface HealthResponse {
+  status: string;
+}
+
+export interface ResearchRequest {
+  query: string;
+}
+
 export interface Citation {
   index?: number;             // [1], [2], ...
   source_type?: "web" | "rag";
@@ -71,3 +82,6 @@ export interface SseProgressPayload {
   completed_steps: string[];
   error?: string;
 }
+
+/** The failed SSE event adds a safe error string to the progress payload. */
+export type SseFailedPayload = SseProgressPayload & { error: string };

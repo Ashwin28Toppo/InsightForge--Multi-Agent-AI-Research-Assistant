@@ -1,60 +1,153 @@
 "use client";
 
-import { SseProgressPayload } from "../types/api";
+import type { SseProgressPayload, SseFailedPayload } from "../types/api";
 
-interface StreamHandlers {
+export interface StreamHandlers {
+  onOpen?: () => void;
   onQueued?: (payload: SseProgressPayload) => void;
   onProgress?: (payload: SseProgressPayload) => void;
   onCompleted?: (payload: SseProgressPayload) => void;
-  onFailed?: (payload: SseProgressPayload, error: string) => void;
-  onReconnect?: () => void;
+  onFailed?: (payload: SseFailedPayload, error: string) => void;
+  onReconnecting?: (attempt: number) => void;
+  /** Reconnection gave up (max attempts reached); caller may fall back to polling. */
+  onGiveUp?: () => void;
+  /** Terminal event received; the stream is closed. */
+  onTerminal?: () => void;
 }
 
+const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
+const INITIAL_RETRY_MS = 1000;
+const MAX_RETRY_MS = 15000;
+const MAX_RETRY_ATTEMPTS = 6;
+
+/** Parse an SSE data payload defensively — never throw on malformed JSON. */
+function parsePayload(data: string): SseProgressPayload | null {
+  try {
+    const parsed: unknown = JSON.parse(data);
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof (parsed as Record<string, unknown>).status === "string"
+    ) {
+      return parsed as SseProgressPayload;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Subscribe to the job's Server-Sent Events stream.
+ *
+ * - Reconnects with exponential backoff (capped) when the connection drops
+ *   while the job is still active.
+ * - NEVER creates a new research job — it only reconnects to the same
+ *   `/research/{jobId}/stream` endpoint.
+ * - Stops reconnecting after a terminal (completed/failed) event.
+ * - Returns a cleanup function that closes the stream and cancels timers.
+ */
 export function subscribeResearchStream(
   jobId: string,
   handlers: StreamHandlers
 ): () => void {
-  // NOTE: Real integration will use native EventSource:
-  // const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
-  // const source = new EventSource(`${BASE_URL}/research/${jobId}/stream`);
-  // ...
-  // return () => source.close();
+  if (typeof window === "undefined") {
+    return () => {};
+  }
 
-  console.log(`Subscribed mock stream for job: ${jobId}`);
+  let source: EventSource | null = null;
+  let closed = false;
+  let terminal = false;
+  let retryAttempt = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Simulate progress events for testing the timeline visual state
-  const mockQueuedTimeout = setTimeout(() => {
-    handlers.onQueued?.({
-      job_id: jobId,
-      status: "queued",
-      current_step: null,
-      completed_steps: []
+  const url = `${BASE_URL}/research/${encodeURIComponent(jobId)}/stream`;
+
+  const scheduleReconnect = () => {
+    if (closed || terminal) return;
+    if (retryAttempt >= MAX_RETRY_ATTEMPTS) {
+      handlers.onGiveUp?.();
+      return;
+    }
+    const delay = Math.min(INITIAL_RETRY_MS * 2 ** retryAttempt, MAX_RETRY_MS);
+    retryAttempt += 1;
+    handlers.onReconnecting?.(retryAttempt);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      connect();
+    }, delay);
+  };
+
+  const connect = () => {
+    if (closed || terminal) return;
+    const es = new EventSource(url);
+    source = es;
+
+    es.addEventListener("open", () => {
+      if (closed || terminal) return;
+      retryAttempt = 0;
+      handlers.onOpen?.();
     });
-  }, 500);
 
-  const mockProgressTimeout = setTimeout(() => {
-    handlers.onProgress?.({
-      job_id: jobId,
-      status: "running",
-      current_step: "research",
-      completed_steps: ["plan"]
+    es.addEventListener("queued", (event) => {
+      if (closed) return;
+      const payload = parsePayload((event as MessageEvent).data);
+      if (payload) handlers.onQueued?.(payload);
     });
-  }, 2000);
 
-  const mockCompletedTimeout = setTimeout(() => {
-    handlers.onCompleted?.({
-      job_id: jobId,
-      status: "completed",
-      current_step: "writer",
-      completed_steps: ["plan", "research", "evidence", "claim_extraction", "fact_check", "citation", "confidence", "writer"]
+    es.addEventListener("progress", (event) => {
+      if (closed) return;
+      const payload = parsePayload((event as MessageEvent).data);
+      if (payload) handlers.onProgress?.(payload);
     });
-  }, 6000);
 
-  // Return unsubscribe cleanup handler
+    es.addEventListener("completed", (event) => {
+      if (closed) return;
+      const payload = parsePayload((event as MessageEvent).data);
+      terminal = true;
+      es.close();
+      if (payload) handlers.onCompleted?.(payload);
+      handlers.onTerminal?.();
+    });
+
+    es.addEventListener("failed", (event) => {
+      if (closed) return;
+      const payload = parsePayload((event as MessageEvent).data);
+      const failed: SseFailedPayload = payload
+        ? { ...payload, error: payload.error || "Research job failed" }
+        : {
+            job_id: jobId,
+            status: "failed",
+            current_step: null,
+            completed_steps: [],
+            error: "Research job failed",
+          };
+      terminal = true;
+      es.close();
+      handlers.onFailed?.(failed, failed.error);
+      handlers.onTerminal?.();
+    });
+
+    es.onerror = () => {
+      // Fired on network drops AND after es.close(); only reconnect while
+      // the job is still active and we didn't close deliberately.
+      if (terminal || closed) return;
+      es.close();
+      scheduleReconnect();
+    };
+  };
+
+  connect();
+
   return () => {
-    console.log(`Unsubscribed mock stream for job: ${jobId}`);
-    clearTimeout(mockQueuedTimeout);
-    clearTimeout(mockProgressTimeout);
-    clearTimeout(mockCompletedTimeout);
+    closed = true;
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+    if (source) {
+      source.close();
+      source = null;
+    }
   };
 }

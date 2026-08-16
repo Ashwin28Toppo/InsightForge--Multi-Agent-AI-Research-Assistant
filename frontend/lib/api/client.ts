@@ -5,11 +5,14 @@ const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000"
 export class ApiError extends Error {
   status: number;
   detail: unknown;
+  /** Server-generated request id (X-Request-ID header), when available. */
+  requestId: string | null;
 
-  constructor(status: number, detail: unknown) {
+  constructor(status: number, detail: unknown, requestId: string | null = null) {
     super(typeof detail === "string" ? detail : "API request failed");
     this.status = status;
     this.detail = detail;
+    this.requestId = requestId;
     this.name = "ApiError";
   }
 }
@@ -32,7 +35,8 @@ export async function apiFetch<T>(
   };
 
   const response = await fetch(`${BASE_URL}${endpoint}`, config);
-  
+  const responseRequestId = response.headers.get("X-Request-ID");
+
   if (!response.ok) {
     let errorDetail: unknown = "Unknown api connection error";
     try {
@@ -47,8 +51,13 @@ export async function apiFetch<T>(
     } catch {
       // Non-JSON error body — fall through to the generic message.
     }
-    throw new ApiError(response.status, errorDetail);
+    throw new ApiError(response.status, errorDetail, responseRequestId);
   }
 
-  return response.json() as Promise<T>;
+  // The health endpoint returns a tiny JSON body; keep responses lenient.
+  try {
+    return (await response.json()) as T;
+  } catch {
+    return undefined as T;
+  }
 }

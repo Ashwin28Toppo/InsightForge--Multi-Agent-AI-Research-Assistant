@@ -1,16 +1,8 @@
 "use client";
 
-// NOTE: Real integration will call apiFetch<{ status: string }>("/health") from ./client.
+import { apiFetch } from "./client";
+import type { HealthResponse } from "../types/api";
 
-export interface HealthResponse {
-  status: string;
-}
-
-export async function getHealth(): Promise<HealthResponse> {
-  // NOTE: Real integration will call:
-  // return apiFetch<HealthResponse>("/health");
-  
-  return new Promise((resolve) => {
-    resolve({ status: "ok" });
-  });
+export function getHealth(): Promise<HealthResponse> {
+  return apiFetch<HealthResponse>("/health");
 }
