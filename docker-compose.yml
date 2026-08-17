@@ -1,14 +1,16 @@
-# ---- Phase 2F Step 12: InsightForge production-style local stack ----
+# ---- Phase 2F Step 15: InsightForge production stack ----
 #
-# Services: PostgreSQL, FastAPI backend, Next.js frontend, Qdrant (vector store).
-# - All services share one internal network; only backend:8000 and
-#   frontend:3000 are published to the host.
-# - PostgreSQL + Qdrant data are persisted in named volumes and survive
-#   container recreation.
+# Services: Caddy (reverse proxy + HTTPS), PostgreSQL, FastAPI backend,
+# Next.js frontend, Qdrant (vector store).
+# - All services share one internal network. ONLY the public HTTP/HTTPS
+#   ports (80/443) are published to the host; backend, frontend, PostgreSQL
+#   and Qdrant are internal-only and reachable only via Caddy / the network.
+# - Caddy terminates TLS (Let's Encrypt for DOMAIN, auto-renewed) and routes
+#   /auth/*, /research/*, /health to the backend; everything else to the
+#   frontend. HTTP redirects to HTTPS automatically.
+# - PostgreSQL + Qdrant data are persisted in named volumes.
 # - Secrets/credentials come from the environment (Compose interpolates
-#   `${POSTGRES_*}`; API keys via `env_file: .env`) — never hardcoded here.
-# - The backend reaches PostgreSQL through DATABASE_URL (the `postgres`
-#   service on the compose network) and Qdrant through QDRANT_URL.
+#   `${POSTGRES_*}`; API keys via the backend env_file) — never hardcoded.
 name: insightforge
 
 services:
@@ -27,7 +29,7 @@ services:
       timeout: 5s
       retries: 10
     expose:
-      - "5432" # internal only — the backend talks to it on the network
+      - "5432" # internal only — never published to the host
     networks:
       - insightforge-net
 
@@ -37,7 +39,7 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
     expose:
-      - "6333" # internal only — the backend talks to it on the network
+      - "6333" # internal only — never published to the host
     networks:
       - insightforge-net
 
@@ -57,8 +59,8 @@ services:
       # PostgreSQL runs as the `postgres` service on the compose network.
       # Credentials come from the environment (see POSTGRES_* above).
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-insightforge}:${POSTGRES_PASSWORD:-insightforge}@postgres:5432/${POSTGRES_DB:-insightforge}
-    ports:
-      - "8000:8000" # browser + frontend reach the API here
+    expose:
+      - "8000" # internal only — reached via the Caddy reverse proxy
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,15 +74,37 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        # Public-only: the browser calls the backend through the published
-        # host port. This is the ONLY variable the frontend receives — no
-        # server secrets (API keys, DB credentials) are ever passed to it.
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+        # Public-only: the browser talks to the SAME origin (https://DOMAIN)
+        # and Caddy routes /auth/*, /research/* to the backend. This is the
+        # ONLY variable the frontend receives — no server secrets (API keys,
+        # DB credentials) are ever passed to it.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-https://localhost}
     restart: unless-stopped
-    ports:
-      - "3000:3000" # browser
+    expose:
+      - "3000" # internal only — reached via the Caddy reverse proxy
     depends_on:
       - backend
+    networks:
+      - insightforge-net
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"   # public — HTTP (redirects to HTTPS)
+      - "443:443" # public — HTTPS
+    environment:
+      # Public site name. With a real domain pointing at this server, Caddy
+      # automatically provisions and renews a trusted Let's Encrypt cert.
+      # With DOMAIN=localhost it uses Caddy's internal CA (local testing).
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data     # certificates + ACME state (persists renewals)
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - frontend
     networks:
       - insightforge-net
 
@@ -91,3 +115,5 @@ networks:
 volumes:
   postgres_data:
   qdrant_storage:
+  caddy_data:
+  caddy_config:
