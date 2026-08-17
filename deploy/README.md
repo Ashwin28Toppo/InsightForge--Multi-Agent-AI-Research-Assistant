@@ -145,14 +145,15 @@ docker compose -p insightforge-prod exec backend \
 ### Backup & restore (PostgreSQL)
 
 ```bash
-scripts/backup-postgres.sh        # pg_dump -> deploy/backups/insightforge-<ts>.sql
-scripts/restore-postgres.sh       # restore (destructive) from the newest dump
+scripts/backup-postgres.sh        # pg_dump -> backup/insightforge-<ts>.sql
+scripts/restore-postgres.sh <backup.sql>   # restore (destructive) from a dump
 ```
 
-Backups are written to `deploy/backups/` on the server. Copy them off the
-server (e.g. to object storage) — a backup on the same disk is not a disaster
-recovery backup. `scripts/health-check.sh` warns when the newest backup is
-older than 48h (`MIN_BACKUP_AGE_H`).
+Both scripts target the `insightforge-prod` Compose project by default
+(`PROJECT=...` to override). Backups are written to `backup/` on the server.
+Copy them off the server (e.g. to object storage) — a backup on the same
+disk is not a disaster recovery backup. `scripts/health-check.sh` warns when
+the newest backup is older than 48h (`MIN_BACKUP_AGE_H`).
 
 ### Restarting services
 

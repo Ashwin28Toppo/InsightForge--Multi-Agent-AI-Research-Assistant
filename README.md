@@ -13,11 +13,12 @@ fact-checked report**. Behind the scenes a LangGraph pipeline coordinates
 multiple specialized agents (planner, researcher, evidence extractor, claim
 extractor, fact-checker, citator, confidence scorer, writer, critic). The
 FastAPI backend exposes this pipeline as a clean, observable HTTP API, and a
-future Next.js frontend (Phase 2E) will render the live research experience.
+Next.js frontend (React 19, Tailwind v4) renders the live research
+experience. The full stack runs as a single-server Docker Compose deployment
+behind a Caddy reverse proxy (HTTPS).
 
-The backend is **Phase 2D complete** and is frontend-integration ready. This
-README is part of a **UI handoff package** so that another coding agent
-(Antigravity) can build the frontend without reverse-engineering the backend.
+The backend is **Phase 2D complete** and the frontend is fully integrated.
+Deployment and operations are documented in `deploy/README.md`.
 
 ---
 
@@ -160,7 +161,9 @@ queued ──► running ──► completed   (result available via status endp
 
 - Terminal jobs are deleted after `JOB_TTL_SECONDS` (default 3600 s). After
   expiry they behave exactly like unknown jobs → **404**.
-- Jobs live **in memory** (by design); jobs are lost on backend restart.
+- Jobs persist in **PostgreSQL** (production) or in memory (in-memory mode
+  used when `DATABASE_URL` is unset); persisted jobs survive backend
+  restarts.
 
 ### SSE architecture (for the frontend)
 
@@ -192,9 +195,9 @@ queued ──► running ──► completed   (result available via status endp
 | `backend/app/rag/` | RAG: ingestion, cleaning, chunking, embeddings, vector store. |
 | `backend/app/tools/` | Web tools: Tavily `web_search`, `scrape_url`, URL utilities. |
 | `backend/app/core/` | Configuration (`config.py`, pydantic-settings). |
-| `backend/tests/` | Offline pytest suite (447 tests). |
-| `app.py` | Legacy Streamlit prototype UI (keep — do not use for the new frontend). |
-| `frontend/` | **Does not exist yet** — created in Phase 2E by Antigravity. |
+| `backend/tests/` | Offline pytest suite (562 tests). |
+| `app.py` | Legacy Streamlit prototype UI (kept for reference — not used by the production app). |
+| `frontend/` | Next.js frontend (App Router, React 19, Tailwind v4, `output: "standalone"`). |
 | `.venv/` | Python virtual environment (never touch). |
 
 Full detail: see `FOLDER_GUIDE.md`.
@@ -207,7 +210,7 @@ Full detail: see `FOLDER_GUIDE.md`.
 - Live progress via SSE (`/research/{job_id}/stream`).
 - Job states: `queued`, `running`, `completed`, `failed`.
 - Final report rendering (markdown), citations, sources, evidence, fact checks.
-- Research history (in-browser — the backend has **no history endpoint yet**).
+- Research history (via the backend `GET /research/history` endpoint).
 - Loading / error / empty / success states everywhere.
 - Responsive desktop + mobile.
 - A clean, isolated API layer (`lib/api/*`, `lib/sse/*`).
@@ -275,14 +278,119 @@ arbitrary sequence.
 2. OpenAPI: http://127.0.0.1:8000/docs
 3. Tests (offline, no external services):
    ```bash
-   .venv/Scripts/python.exe -m pytest -q          # 447 passing, 0 warnings
+   .venv/Scripts/python.exe -m pytest -q          # 562 passing, 0 warnings
    ```
-4. The frontend (Phase 2E) will run separately (e.g. `next dev` on port 3000)
-   and talk to `http://127.0.0.1:8000` — CORS already allows it.
+4. The frontend (from `frontend/`):
+   ```bash
+   npm install
+   npm run dev        # http://localhost:3000
+   npm run lint       # eslint
+   npm run build      # production build
+   ```
+   It talks to `http://127.0.0.1:8000` — CORS already allows it.
 5. **Never run a real research request just to test the UI** — external API
    quota is unnecessary; use a mocked/offline pipeline or fixture data.
 
 ---
+
+## Production Setup
+
+Single-server Docker Compose deployment (Caddy reverse proxy + HTTPS,
+PostgreSQL, FastAPI backend, Next.js frontend, Qdrant). Full operations
+documentation: **`deploy/README.md`**.
+
+### Local development startup
+
+```bash
+# 1. Backend (from repo root)
+.venv/Scripts/python.exe -m uvicorn backend.app.api:app --host 127.0.0.1 --port 8000
+
+# 2. Frontend (from frontend/)
+npm install
+npm run dev        # http://localhost:3000
+```
+
+Set `DATABASE_URL` (asyncpg URL) in `.env` to use PostgreSQL locally; with no
+`DATABASE_URL` the backend runs in-memory. Real research requires the API
+keys in `.env` (`GROQ_API_KEY`, `TAVILY_API_KEY`, `GOOGLE_API_KEY`); see
+`.env.example`.
+
+### Production startup (using `deploy/.env.production`)
+
+```bash
+# 1. Create the production env file from the template and fill in REAL values
+cp deploy/.env.production.example deploy/.env.production
+
+# 2. Build + start the stack on the production project (volumes are created
+#    fresh with the strong credentials; NEVER `docker compose down -v`)
+docker compose --env-file deploy/.env.production -p insightforge-prod up -d --build
+
+# 3. Apply Alembic migrations
+docker compose -p insightforge-prod exec backend sh -c "cd /app/backend && alembic upgrade head"
+```
+
+### HTTPS / Caddy / DOMAIN
+
+- Caddy terminates TLS and auto-provisions a trusted **Let's Encrypt**
+  certificate for `DOMAIN` (set in `deploy/.env.production`); point a DNS
+  **A record** at the server's public IP and open ports 80/443.
+- With `DOMAIN=localhost`, Caddy uses its **internal CA** (HTTPS works but is
+  untrusted by browsers — local testing only).
+- Only ports **80/443** are published; backend, frontend, PostgreSQL and
+  Qdrant are internal-only.
+- `NEXT_PUBLIC_API_BASE_URL` and `CORS_ORIGINS` must match the production
+  origin (same-origin over HTTPS).
+
+### Migrations
+
+```bash
+docker compose -p insightforge-prod exec backend sh -c "cd /app/backend && alembic upgrade head"
+```
+
+Alembic migrations live in `backend/alembic/`; the current schema is
+`0001_initial` (users + research_jobs).
+
+### Backup / restore (PostgreSQL)
+
+```bash
+scripts/backup-postgres.sh                 # pg_dump → backup/insightforge-<ts>.sql
+scripts/restore-postgres.sh <backup.sql>   # restore (destructive — replaces the DB)
+```
+
+Both scripts target the `insightforge-prod` Compose project by default
+(`PROJECT=...` to override). The ops health-check script also verifies backup
+recency.
+
+### Health checks
+
+```bash
+docker compose -p insightforge-prod ps      # all services "(healthy)"
+curl -s https://DOMAIN/health               # {"status":"ok"}
+scripts/health-check.sh                     # full-stack ops check
+```
+
+Every service has a Docker healthcheck (postgres `pg_isready`, qdrant
+`/healthz`, backend `/health`, frontend `/`, caddy HTTPS probe).
+
+### CI/CD deployment
+
+- `.github/workflows/ci.yml` — on push/PR to `v2-fullstack`: `pytest`,
+  `npm run lint`, `npm run build`, `docker compose build backend frontend`.
+- `.github/workflows/deploy.yml` — on push to `v2-fullstack`, SSHes to the
+  production server and runs `deploy/deploy.sh` (secrets: `DEPLOY_HOST`,
+  `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_PORT`, `DEPLOY_DIR`, `DOMAIN`).
+- `deploy/deploy.sh` builds, recreates (volumes preserved), runs migrations,
+  health-checks backend/frontend/PostgreSQL/Qdrant, and records each attempt
+  in `deploy/deployments.log` (OK/FAILED with commit + previous commit).
+
+### Rollback
+
+```bash
+DEPLOY_COMMIT=<previous-good-sha> ./deploy/deploy.sh   # redeploy an older commit
+SKIP_GIT=1 ./deploy/deploy.sh                          # redeploy current checkout
+```
+
+Volumes are never touched by a deploy, so rollback preserves all data.
 
 ## Docker + PostgreSQL (Phase 2F Steps 11–12)
 
@@ -309,6 +417,10 @@ docker compose exec backend sh -c "cd /app/backend && alembic upgrade head"
 scripts/backup-postgres.sh                 # -> backup/insightforge-<ts>.sql
 scripts/restore-postgres.sh backup/insightforge-<ts>.sql   # replaces DB contents
 ```
+
+> The scripts default to the **production** Compose project
+> (`insightforge-prod`). For this local stack, set `PROJECT=insightforge`
+> (e.g. `PROJECT=insightforge scripts/backup-postgres.sh`).
 
 On Windows PowerShell, use `cmd /c` redirection so the dump stays raw bytes
 (PowerShell 5.1's `>`/pipe would re-encode to UTF-16 and corrupt text data):
@@ -378,8 +490,10 @@ Production secrets (API keys, `AUTH_JWT_SECRET`, `POSTGRES_PASSWORD`,
 gitignored `deploy/.env.production`. Nothing secret is printed to logs.
 
 ### Rollback
-Every deploy records `deployed <new> (previous: <old>)` in
-`deploy/deployments.log`. To roll back manually to the previous known-good
+Every deploy records one line in `deploy/deployments.log`:
+`<timestamp> OK commit=<new> previous=<old>` on success, or
+`<timestamp> FAILED commit=<ref> previous=<old>` on any failure (via the
+script's `ERR` trap). To roll back manually to the previous known-good
 commit:
 
 ```bash
@@ -398,8 +512,9 @@ to re-run); rollback does not downgrade the schema.
 - **Migrations**: `alembic upgrade head` runs on every deploy against the
   production PostgreSQL; it is idempotent, so re-deploys and rollbacks are
   safe.
-- **Health checks**: the deploy script polls `https://DOMAIN/health` for
-  `{"status":"ok"}` (retries with backoff) and requires the frontend
+- **Health checks**: the deploy script requires PostgreSQL (`pg_isready`) and
+  Qdrant (`/healthz`) to be available, polls `https://DOMAIN/health` for
+  `{"status":"ok"}` (retries with backoff), and requires the frontend
   `https://DOMAIN/` to respond — otherwise the deployment exits non-zero.
 
 ---

@@ -84,7 +84,7 @@ else
 fi
 
 echo "==> Backups"
-newest="$(ls -1t deploy/backups/*.sql 2>/dev/null | head -n1 || true)"
+newest="$(ls -1t backup/*.sql 2>/dev/null | head -n1 || true)"
 if [ -n "$newest" ] && [ -f "$newest" ]; then
   age_s=$(( $(date +%s) - $(stat -c %Y "$newest") ))
   age_h=$(( age_s / 3600 ))
@@ -94,7 +94,7 @@ if [ -n "$newest" ] && [ -f "$newest" ]; then
     note "newest backup $newest is ${age_h} h old (min ${MIN_BACKUP_AGE_H} h)"
   fi
 else
-  note "no backup found under deploy/backups/"
+  note "no backup found under backup/"
 fi
 
 if [ "$failures" -eq 0 ]; then

@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Virtual Environment
 .venv/
@@ -8,6 +9,8 @@ venv/
 
 # Environment Variables
 .env
+.env.local
+.env.production
 
 # Production secrets (deployment)
 deploy/.env.production
@@ -30,3 +33,6 @@ backup/
 
 # OS Files
 .DS_Store
+
+# Logs
+*.log
