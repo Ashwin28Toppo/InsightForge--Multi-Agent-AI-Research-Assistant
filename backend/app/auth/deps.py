@@ -15,6 +15,7 @@ Phase 2F Step 4.
 """
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -27,8 +28,12 @@ from backend.app.core.config import settings
 from backend.app.db.models import User
 from backend.app.db.session import get_db
 
+logger = logging.getLogger(__name__)
+
 
 def _unauthorized() -> HTTPException:
+    # Log the rejection reason (never the token/cookie value).
+    logger.info("authentication failed: invalid or missing session")
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Not authenticated",

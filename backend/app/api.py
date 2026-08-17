@@ -30,6 +30,7 @@ import asyncio
 import json
 import logging
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, AsyncIterator, Literal
 from uuid import UUID, uuid4
@@ -53,6 +54,41 @@ from backend.app.repositories.jobs_postgres import PostgresJobStore
 
 logger = logging.getLogger(__name__)
 
+
+def _configure_logging() -> None:
+    """One-time logging setup so structured app logs reach the container logs.
+
+    Under uvicorn, the root logger has no handler, so INFO messages from the
+    app loggers are dropped by Python's last-resort handler (WARNING+ only).
+    Add a root StreamHandler at INFO so the structured events (job created/
+    started/completed/failed, auth success/failure, request completion,
+    startup/shutdown) are actually emitted. uvicorn's own access/error
+    loggers keep their handlers and ``propagate=False``, so nothing is
+    duplicated; noisy third-party loggers are turned down.
+    """
+    if logging.getLogger().handlers:
+        return  # already configured (e.g. pytest)
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    )
+    root = logging.getLogger()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    for noisy in ("httpx", "httpcore", "urllib3", "asyncio"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+_configure_logging()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Log process startup/shutdown (structured, no secrets)."""
+    logger.info("InsightForge API startup")
+    yield
+    logger.info("InsightForge API shutdown")
+
 app = FastAPI(
     title="InsightForge API",
     description=(
@@ -60,6 +96,7 @@ app = FastAPI(
         "research pipeline over HTTP. Thin transport layer only."
     ),
     version="0.2.0",
+    lifespan=lifespan,
 )
 
 
@@ -370,6 +407,8 @@ def _run_job(job_id: str, query: str) -> None:
     as a safe error string.
     """
     store.mark_running(job_id)
+    logger.info("research job started %s", f"job_id={job_id}")
+    started = time.perf_counter()
 
     def on_step(step: str) -> None:
         store.append_step(job_id, step)
@@ -384,6 +423,11 @@ def _run_job(job_id: str, query: str) -> None:
         return
 
     store.mark_completed(job_id, result)
+    logger.info(
+        "research job completed %s",
+        f"job_id={job_id} duration_ms={(time.perf_counter() - started) * 1000:.2f} "
+        f"result_size={len(result) if result else 0}",
+    )
 
 
 @app.get(
@@ -447,6 +491,11 @@ def research(
     job_id = str(uuid4())
     request.state.job_id = job_id
     store.create(job_id=job_id, query=payload.query, user_id=current_user_id)
+    # Structured job event (no query text / no secrets).
+    logger.info(
+        "research job created %s",
+        f"job_id={job_id} user_id={current_user_id} query_len={len(payload.query)}",
+    )
     background_tasks.add_task(_run_job, job_id, payload.query)
     return ResearchJobResponse(job_id=job_id, status="queued")
 

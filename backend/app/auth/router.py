@@ -7,6 +7,7 @@ The research API remains public; ownership enforcement is a later step.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated
 from uuid import UUID
@@ -26,6 +27,8 @@ from backend.app.auth.users import create_user, get_user_by_email
 from backend.app.core.config import settings
 from backend.app.db.models import User
 from backend.app.db.session import get_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -146,6 +149,7 @@ async def signup(
     """Register a new user and start an authenticated session."""
     existing = await get_user_by_email(db, payload.email)
     if existing is not None:
+        logger.info("signup rejected: email already registered")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Email already registered",
@@ -163,12 +167,14 @@ async def signup(
         # Race condition: another request created the email between our check
         # and our insert — the DB unique index is the final authority.
         await db.rollback()
+        logger.info("signup rejected: email already registered (race)")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Email already registered",
         )
 
     _set_auth_cookie(response, create_access_token(user.id))
+    logger.info("user signed up %s", f"user_id={user.id}")
     return user
 
 
@@ -196,11 +202,13 @@ async def login(
     user = await get_user_by_email(db, payload.email)
     if user is None or not verify_password(payload.password, user.password_hash):
         # One generic message — never reveals whether the email exists.
+        logger.warning("login failed %s", f"email={payload.email}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
     _set_auth_cookie(response, create_access_token(user.id))
+    logger.info("user logged in %s", f"user_id={user.id}")
     return user
 
 
@@ -240,3 +248,4 @@ async def me(current_user: Annotated[User, Depends(get_current_user)]) -> User:
 async def logout(response: Response) -> None:
     """Clear the access-token cookie (idempotent)."""
     _clear_auth_cookie(response)
+    logger.info("user session ended (logout)")

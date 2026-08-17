@@ -40,6 +40,13 @@ services:
       - qdrant_storage:/qdrant/storage
     expose:
       - "6333" # internal only — never published to the host
+    healthcheck:
+      # HTTP healthz via bash /dev/tcp (the qdrant image has no curl/wget).
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333 && printf \"GET /healthz HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\" >&3 && grep -q \"200 OK\" <&3'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     networks:
       - insightforge-net
 
@@ -61,11 +68,17 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-insightforge}:${POSTGRES_PASSWORD:-insightforge}@postgres:5432/${POSTGRES_DB:-insightforge}
     expose:
       - "8000" # internal only — reached via the Caddy reverse proxy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
       qdrant:
-        condition: service_started
+        condition: service_healthy
     networks:
       - insightforge-net
 
@@ -80,10 +93,23 @@ services:
         # DB credentials) are ever passed to it.
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-https://localhost}
     restart: unless-stopped
+    environment:
+      # Docker injects HOSTNAME=<container-id>; Next.js standalone binds to
+      # that hostname instead of 0.0.0.0, so localhost:3000 inside the
+      # container refuses connections and the healthcheck would fail. Pin
+      # HOSTNAME=0.0.0.0 so the server listens on all interfaces.
+      HOSTNAME: "0.0.0.0"
     expose:
       - "3000" # internal only — reached via the Caddy reverse proxy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - insightforge-net
 
@@ -102,9 +128,18 @@ services:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data     # certificates + ACME state (persists renewals)
       - caddy_config:/config
+    healthcheck:
+      # Busybox wget against the public HTTPS endpoint (internal CA for
+      # localhost needs --no-check-certificate; real LE certs verify fine).
+      test: ["CMD-SHELL", "wget -q -O /dev/null --no-check-certificate https://localhost/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     depends_on:
-      - backend
-      - frontend
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
     networks:
       - insightforge-net
 

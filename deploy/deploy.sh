@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# ── Production deploy script (Phase 2F Step 16) ─────────────────────────────
+# ── Production deploy script (Phase 2F Step 16/17) ──────────────────────────
 # Runs ON the production server. Called by the CD workflow over SSH; also
 # runnable locally for validation.
 #
 # Flow: checkout requested commit -> docker compose build -> up -d (volumes
-# preserved, NEVER `down -v`) -> alembic upgrade head -> health checks ->
-# record deployed commit.
+# preserved, NEVER `down -v`) -> alembic upgrade head -> dependency + health
+# checks -> record deployed commit (success/failure) in deploy/deployments.log.
 #
 # Environment:
 #   DEPLOY_COMMIT  commit/ref to deploy (default: origin/v2-fullstack)
@@ -17,6 +17,7 @@ set -euo pipefail
 
 PROJECT="insightforge-prod"
 ENV_FILE="deploy/.env.production"
+LOG_FILE="deploy/deployments.log"
 DOMAIN="${DOMAIN:-localhost}"
 CURL_OPTS=(-fsS)
 [ "${CURL_INSECURE:-0}" = "1" ] && CURL_OPTS+=(-k)
@@ -25,6 +26,12 @@ CURL_OPTS=(-fsS)
 cd "$(dirname "$0")/.."
 
 PREV="$(git rev-parse --short HEAD 2>/dev/null || echo none)"
+NEW=""
+record() {
+  # record <status> <commit> <previous>: one line per deployment attempt.
+  mkdir -p deploy
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $1 commit=${2:-unknown} previous=${3:-unknown}" >> "$LOG_FILE"
+}
 
 if [ "${SKIP_GIT:-0}" != "1" ]; then
   echo "==> Fetching and checking out requested commit"
@@ -34,6 +41,9 @@ else
   echo "==> SKIP_GIT=1 — keeping current checkout ($PREV)"
 fi
 
+# Record a failed deploy on any error below (volumes are never touched).
+trap 'record FAILED "${DEPLOY_COMMIT:-unknown}" "$PREV"' ERR
+
 echo "==> Building production images (backend + frontend)"
 docker compose --env-file "$ENV_FILE" -p "$PROJECT" build backend frontend
 
@@ -42,6 +52,17 @@ docker compose --env-file "$ENV_FILE" -p "$PROJECT" up -d
 
 echo "==> Applying Alembic migrations (idempotent)"
 docker compose -p "$PROJECT" exec -T backend sh -c "cd /app/backend && alembic upgrade head"
+
+echo "==> Dependency checks"
+docker compose -p "$PROJECT" exec -T postgres pg_isready >/dev/null || {
+  echo "ERROR: PostgreSQL is not ready" >&2
+  exit 1
+}
+docker compose -p "$PROJECT" exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://qdrant:6333/healthz', timeout=5)" >/dev/null || {
+  echo "ERROR: Qdrant is not reachable" >&2
+  exit 1
+}
+echo "PostgreSQL OK; Qdrant OK."
 
 echo "==> Health checks"
 ok=""
@@ -62,7 +83,7 @@ curl "${CURL_OPTS[@]}" -o /dev/null "https://${DOMAIN}/" || {
 }
 echo "Backend /health OK; frontend OK."
 
+trap - ERR
 NEW="$(git rev-parse --short HEAD)"
-mkdir -p deploy
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) deployed $NEW (previous: $PREV)" >> deploy/deployments.log
+record OK "$NEW" "$PREV"
 echo "==> Deployed $NEW (previous: $PREV)"
