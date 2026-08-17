@@ -339,6 +339,71 @@ strong `POSTGRES_PASSWORD` / `AUTH_JWT_SECRET` values.
 
 ---
 
+## CI/CD (Phase 2F Step 16)
+
+### CI — `.github/workflows/ci.yml`
+Runs on **pull requests to** and **pushes to `v2-fullstack`**:
+
+- Backend: `pip install -r requirements.txt` → `pytest -q` (fails on any failure).
+- Frontend: `npm ci` → `npm run lint` → `npm run build`.
+- Docker: `docker compose build backend frontend` (builds the production
+  images; nothing is pushed to a registry — the server builds on deploy).
+
+### CD — `.github/workflows/deploy.yml` + `deploy/deploy.sh`
+On a push to `v2-fullstack` (or manual `workflow_dispatch`), GitHub Actions
+SSHes into the production server and runs the versioned `deploy/deploy.sh`:
+
+```
+SSH → git fetch + checkout <commit> → docker compose build backend frontend
+    → docker compose up -d (volumes preserved, NEVER `down -v`)
+    → alembic upgrade head (idempotent)
+    → backend /health == {"status":"ok"} → frontend responds → record commit
+```
+
+Health checks must pass or the deploy **fails** (exit 1). The deployed
+commit (and the previous one) is recorded in `deploy/deployments.log`.
+
+### Required GitHub secrets (repository → Settings → Secrets)
+| Secret | Purpose |
+|---|---|
+| `DEPLOY_HOST` | production server IP / hostname |
+| `DEPLOY_USER` | SSH user |
+| `DEPLOY_SSH_KEY` | SSH private key (deploy user) |
+| `DEPLOY_PORT` | SSH port (default 22) |
+| `DEPLOY_DIR` | absolute path to the repo on the server |
+| `DOMAIN` | production domain (health checks, e.g. `app.example.com`) |
+
+Production secrets (API keys, `AUTH_JWT_SECRET`, `POSTGRES_PASSWORD`,
+`.env.production`) stay **outside Git** — they live only in the server's
+gitignored `deploy/.env.production`. Nothing secret is printed to logs.
+
+### Rollback
+Every deploy records `deployed <new> (previous: <old>)` in
+`deploy/deployments.log`. To roll back manually to the previous known-good
+commit:
+
+```bash
+cd /path/to/repo
+git checkout <previous-commit-sha>
+docker compose --env-file deploy/.env.production -p insightforge-prod build backend frontend
+docker compose --env-file deploy/.env.production -p insightforge-prod up -d
+docker compose -p insightforge-prod exec backend sh -c "cd /app/backend && alembic upgrade head"
+# verify: curl -fsS https://DOMAIN/health
+```
+
+Migrations are **forward-only and idempotent** (`alembic upgrade head` is safe
+to re-run); rollback does not downgrade the schema.
+
+### Migration & health-check behavior
+- **Migrations**: `alembic upgrade head` runs on every deploy against the
+  production PostgreSQL; it is idempotent, so re-deploys and rollbacks are
+  safe.
+- **Health checks**: the deploy script polls `https://DOMAIN/health` for
+  `{"status":"ok"}` (retries with backoff) and requires the frontend
+  `https://DOMAIN/` to respond — otherwise the deployment exits non-zero.
+
+---
+
 ## Rules for Future AI Coding Agents
 
 1. **Do not redesign the backend.** It is Phase 2D complete and intentionally

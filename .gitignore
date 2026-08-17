@@ -13,6 +13,9 @@ venv/
 deploy/.env.production
 deploy/.env.prod.*
 
+# Deployment log (runtime record on the server)
+deploy/deployments.log
+
 # RAG / local storage
 qdrant_storage/
 data/

@@ -12,6 +12,7 @@ __pycache__
 deploy/.env.production
 deploy/.env.prod.*
 !*.md
+.github
 frontend
 data
 qdrant_storage
