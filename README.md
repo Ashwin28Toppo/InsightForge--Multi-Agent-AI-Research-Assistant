@@ -372,16 +372,12 @@ scripts/health-check.sh                     # full-stack ops check
 Every service has a Docker healthcheck (postgres `pg_isready`, qdrant
 `/healthz`, backend `/health`, frontend `/`, caddy HTTPS probe).
 
-### CI/CD deployment
+### CI/CD
 
-- `.github/workflows/ci.yml` — on push/PR to `v2-fullstack`: `pytest`,
-  `npm run lint`, `npm run build`, `docker compose build backend frontend`.
-- `.github/workflows/deploy.yml` — on push to `v2-fullstack`, SSHes to the
-  production server and runs `deploy/deploy.sh` (secrets: `DEPLOY_HOST`,
-  `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_PORT`, `DEPLOY_DIR`, `DOMAIN`).
-- `deploy/deploy.sh` builds, recreates (volumes preserved), runs migrations,
-  health-checks backend/frontend/PostgreSQL/Qdrant, and records each attempt
-  in `deploy/deployments.log` (OK/FAILED with commit + previous commit).
+This repository no longer uses GitHub Actions workflows for CI/CD. Manual
+deployment is supported via the existing `deploy/deploy.sh` script (see
+`deploy/README.md`). The production deploy process and secrets are managed
+outside of Git (see `deploy/.env.production.example`).
 
 ### Rollback
 
@@ -451,43 +447,7 @@ strong `POSTGRES_PASSWORD` / `AUTH_JWT_SECRET` values.
 
 ---
 
-## CI/CD (Phase 2F Step 16)
-
-### CI — `.github/workflows/ci.yml`
-Runs on **pull requests to** and **pushes to `v2-fullstack`**:
-
-- Backend: `pip install -r requirements.txt` → `pytest -q` (fails on any failure).
-- Frontend: `npm ci` → `npm run lint` → `npm run build`.
-- Docker: `docker compose build backend frontend` (builds the production
-  images; nothing is pushed to a registry — the server builds on deploy).
-
-### CD — `.github/workflows/deploy.yml` + `deploy/deploy.sh`
-On a push to `v2-fullstack` (or manual `workflow_dispatch`), GitHub Actions
-SSHes into the production server and runs the versioned `deploy/deploy.sh`:
-
-```
-SSH → git fetch + checkout <commit> → docker compose build backend frontend
-    → docker compose up -d (volumes preserved, NEVER `down -v`)
-    → alembic upgrade head (idempotent)
-    → backend /health == {"status":"ok"} → frontend responds → record commit
-```
-
-Health checks must pass or the deploy **fails** (exit 1). The deployed
-commit (and the previous one) is recorded in `deploy/deployments.log`.
-
-### Required GitHub secrets (repository → Settings → Secrets)
-| Secret | Purpose |
-|---|---|
-| `DEPLOY_HOST` | production server IP / hostname |
-| `DEPLOY_USER` | SSH user |
-| `DEPLOY_SSH_KEY` | SSH private key (deploy user) |
-| `DEPLOY_PORT` | SSH port (default 22) |
-| `DEPLOY_DIR` | absolute path to the repo on the server |
-| `DOMAIN` | production domain (health checks, e.g. `app.example.com`) |
-
-Production secrets (API keys, `AUTH_JWT_SECRET`, `POSTGRES_PASSWORD`,
-`.env.production`) stay **outside Git** — they live only in the server's
-gitignored `deploy/.env.production`. Nothing secret is printed to logs.
+<!-- GitHub Actions workflows removed. Manual deployment via deploy/deploy.sh. -->
 
 ### Rollback
 Every deploy records one line in `deploy/deployments.log`:
