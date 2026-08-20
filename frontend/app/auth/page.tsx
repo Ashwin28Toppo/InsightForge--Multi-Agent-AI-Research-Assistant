@@ -6,7 +6,7 @@ import AppShell from "@/components/layout/AppShell";
 import { useAuth } from "@/lib/auth/auth-context";
 import { apiErrorMessage } from "@/lib/utils/errors";
 import { ApiError } from "@/lib/api/client";
-import { Loader2, Lock, LogIn, Mail, UserPlus } from "lucide-react";
+import { Loader2, Lock, LogIn, Mail, UserPlus, Eye, EyeOff } from "lucide-react";
 
 type Mode = "login" | "signup";
 
@@ -35,6 +35,7 @@ export default function AuthPage() {
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -227,7 +228,7 @@ export default function AuthPage() {
                 />
                 <input
                   id="auth-password"
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   required
                   autoComplete={
                     mode === "signup" ? "new-password" : "current-password"
@@ -240,6 +241,14 @@ export default function AuthPage() {
                   }}
                   className={INPUT_CLASSES}
                 />
+                <button
+                  type="button"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  onClick={() => setShowPassword((s) => !s)}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
               </div>
             </div>
 
