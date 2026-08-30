@@ -66,6 +66,8 @@ services:
       # PostgreSQL runs as the `postgres` service on the compose network.
       # Credentials come from the environment (see POSTGRES_* above).
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-insightforge}:${POSTGRES_PASSWORD:-insightforge}@postgres:5432/${POSTGRES_DB:-insightforge}
+    ports:
+      - "8000:8000" # browser access for local dev; do not use the internal service name here
     expose:
       - "8000" # internal only — reached via the Caddy reverse proxy
     healthcheck:
@@ -87,20 +89,20 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        # Public-only: the browser talks to the SAME origin (https://DOMAIN)
-        # and Caddy routes /auth/*, /research/* to the backend. This is the
-        # ONLY variable the frontend receives — no server secrets (API keys,
-        # DB credentials) are ever passed to it.
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-https://localhost}
+        # Local browser requests must hit the host-published backend port.
+        # For the Docker Compose local stack, this is http://localhost:8000.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     restart: unless-stopped
     environment:
+      # Use the host-published backend URL here so the browser can reach it.
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
       # Docker injects HOSTNAME=<container-id>; Next.js standalone binds to
       # that hostname instead of 0.0.0.0, so localhost:3000 inside the
       # container refuses connections and the healthcheck would fail. Pin
       # HOSTNAME=0.0.0.0 so the server listens on all interfaces.
       HOSTNAME: "0.0.0.0"
-    expose:
-      - "3000" # internal only — reached via the Caddy reverse proxy
+    ports:
+      - "3001:3000" # publish to host for local dev
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s

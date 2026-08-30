@@ -4,7 +4,7 @@ from backend.app.core.config import Settings
 
 def test_defaults_without_env_file():
     s = Settings(_env_file=None)
-    assert s.llm_model == "llama-3.1-8b-instant"
+    assert s.llm_model == "openai/gpt-oss-20b"
     assert s.llm_temperature == 0.0
     assert s.llm_max_retries == 2
     assert s.llm_rate_limit_retries == 5

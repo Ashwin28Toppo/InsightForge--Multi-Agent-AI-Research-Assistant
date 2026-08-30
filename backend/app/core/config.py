@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     google_api_key: str = ""
 
     # ── LLM ───────────────────────────────────────────────────────────────
-    llm_model: str = "llama-3.1-8b-instant"
+    llm_model: str = "openai/gpt-oss-20b"
     llm_temperature: float = 0.0
     llm_max_retries: int = 2
     # Total attempts (incl. the first) made when Groq answers 429 rate-limited.

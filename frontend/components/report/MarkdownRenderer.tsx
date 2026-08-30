@@ -111,6 +111,7 @@ export default function MarkdownRenderer({
   const lines = markdown.split(/\r?\n/);
   const blocks: React.ReactNode[] = [];
   let key = 0;
+  let orderedCounter = 0;
 
   const pushParagraph = (buffer: string[]) => {
     if (buffer.length === 0) return;
@@ -133,6 +134,8 @@ export default function MarkdownRenderer({
       pushParagraph(buffer);
       const level = heading[1].length;
       const content = heading[2];
+      // Reset ordered list numbering only at top-level headings
+      if (level === 1) orderedCounter = 0;
       if (level === 1) {
         blocks.push(
           <h1 key={key++} className="text-[1.65rem] md:text-3xl font-bold font-syne tracking-tight text-foreground mt-2 mb-5">
@@ -182,13 +185,23 @@ export default function MarkdownRenderer({
       continue;
     }
 
-    // Unordered list (group consecutive)
+    // Unordered list (group consecutive, allow blank lines between items)
     if (/^[-*]\s+/.test(line)) {
       pushParagraph(buffer);
       const items: string[] = [];
-      while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^[-*]\s+/, ""));
-        i++;
+      while (i < lines.length) {
+        const current = lines[i];
+        if (/^[-*]\s+/.test(current)) {
+          items.push(current.replace(/^[-*]\s+/, ""));
+          i++;
+          continue;
+        }
+        // allow a single or multiple blank lines between list items
+        if (current.trim() === "") {
+          i++;
+          continue;
+        }
+        break;
       }
       i--;
       blocks.push(
@@ -208,21 +221,32 @@ export default function MarkdownRenderer({
       continue;
     }
 
-    // Ordered list (group consecutive)
+    // Ordered list (group consecutive, allow blank lines between items)
     if (/^\d+\.\s+/.test(line)) {
       pushParagraph(buffer);
       const items: string[] = [];
-      while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\d+\.\s+/, ""));
-        i++;
+      while (i < lines.length) {
+        const current = lines[i];
+        if (/^\d+\.\s+/.test(current)) {
+          items.push(current.replace(/^\d+\.\s+/, ""));
+          i++;
+          continue;
+        }
+        // allow blank lines between numbered items
+        if (current.trim() === "") {
+          i++;
+          continue;
+        }
+        break;
       }
       i--;
+      const startVal = orderedCounter + 1;
       blocks.push(
-        <ol key={key++} className="space-y-1.5 my-4 list-none">
+        <ol key={key++} start={startVal} className="space-y-1.5 my-4 list-none">
           {items.map((item, idx) => (
             <li key={idx} className="flex gap-2.5 text-sm text-foreground/90 leading-6">
               <span className="text-primary font-mono text-xs mt-1 shrink-0 select-none" aria-hidden="true">
-                {idx + 1}.
+                {startVal + idx}.
               </span>
               <span>
                 <Inline text={item} onCitationRef={onCitationRef} />
@@ -231,6 +255,7 @@ export default function MarkdownRenderer({
           ))}
         </ol>
       );
+      orderedCounter += items.length;
       continue;
     }
 
