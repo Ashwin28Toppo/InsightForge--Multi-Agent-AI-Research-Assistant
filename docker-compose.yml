@@ -1,0 +1,156 @@
+# ---- Phase 2F Step 15: InsightForge production stack ----
+#
+# Services: Caddy (reverse proxy + HTTPS), PostgreSQL, FastAPI backend,
+# Next.js frontend, Qdrant (vector store).
+# - All services share one internal network. ONLY the public HTTP/HTTPS
+#   ports (80/443) are published to the host; backend, frontend, PostgreSQL
+#   and Qdrant are internal-only and reachable only via Caddy / the network.
+# - Caddy terminates TLS (Let's Encrypt for DOMAIN, auto-renewed) and routes
+#   /auth/*, /research/*, /health to the backend; everything else to the
+#   frontend. HTTP redirects to HTTPS automatically.
+# - PostgreSQL + Qdrant data are persisted in named volumes.
+# - Secrets/credentials come from the environment (Compose interpolates
+#   `${POSTGRES_*}`; API keys via the backend env_file) — never hardcoded.
+name: insightforge
+
+services:
+  postgres:
+    image: postgres:16-alpine # pinned — never `latest`
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-insightforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-insightforge}
+      POSTGRES_DB: ${POSTGRES_DB:-insightforge}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-insightforge} -d ${POSTGRES_DB:-insightforge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "5432" # internal only — never published to the host
+    networks:
+      - insightforge-net
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    expose:
+      - "6333" # internal only — never published to the host
+    healthcheck:
+      # HTTP healthz via bash /dev/tcp (the qdrant image has no curl/wget).
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333 && printf \"GET /healthz HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\" >&3 && grep -q \"200 OK\" <&3'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - insightforge-net
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Runtime secrets file. Defaults to the repo `.env`; production deploys
+    # point this at a gitignored production env file (see deploy/).
+    env_file:
+      - ${BACKEND_ENV_FILE:-.env}
+    environment:
+      # Qdrant runs as a service on the compose network (remote mode); the
+      # Step 10 vector-store implementation already supports QDRANT_URL.
+      QDRANT_URL: http://qdrant:6333
+      # PostgreSQL runs as the `postgres` service on the compose network.
+      # Credentials come from the environment (see POSTGRES_* above).
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-insightforge}:${POSTGRES_PASSWORD:-insightforge}@postgres:5432/${POSTGRES_DB:-insightforge}
+    ports:
+      - "8000:8000" # browser access for local dev; do not use the internal service name here
+    expose:
+      - "8000" # internal only — reached via the Caddy reverse proxy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - insightforge-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Local browser requests must hit the host-published backend port.
+        # For the Docker Compose local stack, this is http://localhost:8000.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    restart: unless-stopped
+    environment:
+      # Use the host-published backend URL here so the browser can reach it.
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      # Docker injects HOSTNAME=<container-id>; Next.js standalone binds to
+      # that hostname instead of 0.0.0.0, so localhost:3000 inside the
+      # container refuses connections and the healthcheck would fail. Pin
+      # HOSTNAME=0.0.0.0 so the server listens on all interfaces.
+      HOSTNAME: "0.0.0.0"
+    ports:
+      - "3001:3000" # publish to host for local dev
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - insightforge-net
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"   # public — HTTP (redirects to HTTPS)
+      - "443:443" # public — HTTPS
+    environment:
+      # Public site name. With a real domain pointing at this server, Caddy
+      # automatically provisions and renews a trusted Let's Encrypt cert.
+      # With DOMAIN=localhost it uses Caddy's internal CA (local testing).
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data     # certificates + ACME state (persists renewals)
+      - caddy_config:/config
+    healthcheck:
+      # Busybox wget against the public HTTPS endpoint (internal CA for
+      # localhost needs --no-check-certificate; real LE certs verify fine).
+      test: ["CMD-SHELL", "wget -q -O /dev/null --no-check-certificate https://localhost/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    networks:
+      - insightforge-net
+
+networks:
+  insightforge-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  qdrant_storage:
+  caddy_data:
+  caddy_config:

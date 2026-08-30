@@ -1,0 +1,43 @@
+# ── InsightForge reverse proxy + HTTPS (Phase 2F Step 15) ─────────────────
+# Caddy terminates TLS and routes to the internal services:
+#   /auth/*, /research/*, /health  -> FastAPI backend
+#   everything else                 -> Next.js frontend
+#
+# HTTPS: with DOMAIN set to a real domain pointing at this server, Caddy
+# automatically obtains + renews a trusted Let's Encrypt certificate (ACME,
+# HTTP-01 challenge via the published :80). With DOMAIN=localhost it uses
+# Caddy's internal CA (local testing only).
+#
+# HTTP -> HTTPS redirect is automatic when a site name is configured.
+
+{$DOMAIN:localhost} {
+	encode gzip
+
+	# API routes -> FastAPI backend (internal, port 8000).
+	# flush_interval -1 disables response buffering so SSE streams live.
+	# `handle /research` matches the exact POST /research path (no trailing
+	# slash); `handle /research/*` matches all sub-paths.
+	handle /auth/* {
+		reverse_proxy backend:8000 {
+			flush_interval -1
+		}
+	}
+	handle /research {
+		reverse_proxy backend:8000 {
+			flush_interval -1
+		}
+	}
+	handle /research/* {
+		reverse_proxy backend:8000 {
+			flush_interval -1
+		}
+	}
+	handle /health {
+		reverse_proxy backend:8000
+	}
+
+	# Everything else -> Next.js frontend (internal, port 3000).
+	handle {
+		reverse_proxy frontend:3000
+	}
+}

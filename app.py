@@ -1,6 +1,8 @@
 import streamlit as st
 import time
-from agents import build_reader_agent, build_search_agent,    writer_chain, critic_chain
+
+from backend.app.core.config import settings
+from backend.app.main import run_research_pipeline
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -293,9 +295,10 @@ details summary {
 # ── Helper: render a step card ────────────────────────────────────────────────
 def step_card(num: str, title: str, state: str, desc: str = ""):
     status_map = {
-        "waiting": ("WAITING", "status-waiting"),
-        "running": ("● RUNNING", "status-running"),
-        "done":    ("✓ DONE",   "status-done"),
+        "waiting":  ("WAITING", "status-waiting"),
+        "running":  ("● RUNNING", "status-running"),
+        "done":     ("✓ DONE",   "status-done"),
+        "disabled": ("SKIPPED",  "status-waiting"),
     }
     label, cls = status_map.get(state, ("", ""))
     card_cls = {"running": "active", "done": "done"}.get(state, "")
@@ -323,8 +326,8 @@ st.markdown("""
     <div class="hero-eyebrow">Multi-Agent AI System</div>
     <h1>Insight<span>Forge</span></h1>
     <p class="hero-sub">
-        Four specialized AI agents collaborate — searching, scraping, writing,
-        and critiquing — to deliver a polished research report on any topic.
+        Specialized AI agents collaborate — searching, verifying, and
+        writing — to deliver a polished research report on any topic.
     </p>
 </div>
 <div class="divider"></div>
@@ -375,23 +378,28 @@ with col_pipeline:
     def s(step):
         if not r:
             return "waiting"
-        steps = ["search", "reader", "writer", "critic"]
-        idx = steps.index(step)
-        completed = list(r.keys())
-        # figure out which steps are done
-        if step in r:
+        # Map pipeline steps to ResearchState fields produced by the graph.
+        state_keys = {
+            "search": "search_results",
+            "claims": "fact_checks",
+            "writer": "report",
+            "critic": "critic_feedback",
+        }
+        steps = ["search", "claims", "writer", "critic"]
+        if state_keys[step] in r:
             return "done"
-        # which step is running now (first not in r)
         if st.session_state.running:
-            for i, k in enumerate(steps):
-                if k not in r:
+            for k in steps:
+                if state_keys[k] not in r:
                     return "running" if k == step else "waiting"
         return "waiting"
 
-    step_card("01", "Search Agent",  s("search"), "Gathers recent web information")
-    step_card("02", "Reader Agent",  s("reader"), "Scrapes & extracts deep content")
-    step_card("03", "Writer Chain",  s("writer"), "Drafts the full research report")
-    step_card("04", "Critic Chain",  s("critic"), "Reviews & scores the report")
+    step_card("01", "Search Agent",      s("search"), "Gathers recent web information")
+    step_card("02", "Claims & Verifier", s("claims"), "Extracts & fact-checks claims")
+    step_card("03", "Writer Chain",      s("writer"), "Drafts the full research report")
+    # The critic is skipped by default on the free tier (settings.run_critic).
+    step_card("04", "Critic Chain", "disabled" if not settings.run_critic else s("critic"),
+              "Reviews & scores the report")
 
 
 # ── Run pipeline ──────────────────────────────────────────────────────────────
@@ -405,50 +413,30 @@ if run_btn:
         st.rerun()
 
 if st.session_state.running and not st.session_state.done:
-    results = {}
     topic_val = st.session_state.topic_input
 
-    # ── Step 1: Search ──
-    with st.spinner("🔍  Search Agent is working…"):
-        search_agent = build_search_agent()
-        sr = search_agent.invoke({
-            "messages": [("user", f"Find recent, reliable and detailed information about: {topic_val}")]
-        })
-        results["search"] = sr["messages"][-1].content
-        st.session_state.results = dict(results)
-    st.rerun() if False else None   # keep inline for now
+    # Live progress via an on_step callback (the pipeline logic itself
+    # lives in backend.app.main.run_research_pipeline).
+    status = st.empty()
+    step_labels = {
+        "plan": "🧭  Planning research angles…",
+        "search": "🔍  Search Agent is working…",
+        "research": "🔍  Search Agent is working…",
+        "reader": "📄  Reader Agent is scraping top resources…",
+        "evidence": "📦  Merging web & RAG evidence…",
+        "claim_extraction": "🔖  Extracting checkable claims…",
+        "fact_check": "✅  Fact-checking claims…",
+        "citation": "📚  Building citations…",
+        "confidence": "📊  Scoring confidence…",
+        "writer": "✍️  Writer is drafting the report…",
+        "critic": "🧐  Critic is reviewing the report…",
+        "increment_rounds": "🔁  Running an additional research round…",
+    }
 
-    # ── Step 2: Reader ──
-    with st.spinner("📄  Reader Agent is scraping top resources…"):
-        reader_agent = build_reader_agent()
-        rr = reader_agent.invoke({
-            "messages": [("user",
-                f"Based on the following search results about '{topic_val}', "
-                f"pick the most relevant URL and scrape it for deeper content.\n\n"
-                f"Search Results:\n{results['search'][:800]}"
-            )]
-        })
-        results["reader"] = rr["messages"][-1].content
-        st.session_state.results = dict(results)
+    def on_step(step: str):
+        status.info(step_labels.get(step, step))
 
-    # ── Step 3: Writer ──
-    with st.spinner("✍️  Writer is drafting the report…"):
-        research_combined = (
-            f"SEARCH RESULTS:\n{results['search']}\n\n"
-            f"DETAILED SCRAPED CONTENT:\n{results['reader']}"
-        )
-        results["writer"] = writer_chain.invoke({
-            "topic": topic_val,
-            "research": research_combined
-        })
-        st.session_state.results = dict(results)
-
-    # ── Step 4: Critic ──
-    with st.spinner("🧐  Critic is reviewing the report…"):
-        results["critic"] = critic_chain.invoke({
-            "report": results["writer"]
-        })
-        st.session_state.results = dict(results)
+    st.session_state.results = run_research_pipeline(topic_val, on_step=on_step)
 
     st.session_state.running = False
     st.session_state.done = True
@@ -463,40 +451,40 @@ if r:
     st.markdown('<div class="section-heading">Results</div>', unsafe_allow_html=True)
 
     # Raw outputs in expanders
-    if "search" in r:
+    if "search_results" in r:
         with st.expander("🔍 Search Results (raw)", expanded=False):
             st.markdown(f'<div class="result-panel"><div class="result-panel-title">Search Agent Output</div>'
-                        f'<div class="result-content">{r["search"]}</div></div>', unsafe_allow_html=True)
+                        f'<div class="result-content">{r["search_results"]}</div></div>', unsafe_allow_html=True)
 
-    if "reader" in r:
+    if "extracted_information" in r:
         with st.expander("📄 Scraped Content (raw)", expanded=False):
             st.markdown(f'<div class="result-panel"><div class="result-panel-title">Reader Agent Output</div>'
-                        f'<div class="result-content">{r["reader"]}</div></div>', unsafe_allow_html=True)
+                        f'<div class="result-content">{r["extracted_information"]}</div></div>', unsafe_allow_html=True)
 
     # Final report
-    if "writer" in r:
+    if "report" in r:
         st.markdown("""
         <div class="report-panel">
             <div class="panel-label orange">📝 Final Research Report</div>
         """, unsafe_allow_html=True)
-        st.markdown(r["writer"])   # render markdown natively
+        st.markdown(r["report"])   # render markdown natively
         st.markdown("</div>", unsafe_allow_html=True)
 
         # Download
         st.download_button(
             label="⬇  Download Report (.md)",
-            data=r["writer"],
+            data=r["report"],
             file_name=f"research_report_{int(time.time())}.md",
             mime="text/markdown",
         )
 
     # Critic feedback
-    if "critic" in r:
+    if "critic_feedback" in r:
         st.markdown("""
         <div class="feedback-panel">
             <div class="panel-label green">🧐 Critic Feedback</div>
         """, unsafe_allow_html=True)
-        st.markdown(r["critic"])
+        st.markdown(r["critic_feedback"])
         st.markdown("</div>", unsafe_allow_html=True)
 
 

@@ -15,6 +15,12 @@ beautifulsoup4>=4.12.0
 requests>=2.31.0
 lxml>=5.0.0
 
+# ── RAG (Phase 2) ────────────────────────────────────────────────────────────
+qdrant-client>=1.10
+langchain-qdrant>=1.0
+pypdf>=4.0
+python-docx>=1.1
+
 python-dotenv>=1.0.0
 aiohttp>=3.9.0
 pandas>=2.0.0
@@ -23,6 +29,33 @@ rich>=13.7.0
 tenacity>=8.2.0
 orjson>=3.9.0
 pydantic>=2.5.0
+pydantic-settings>=2.0.0
 html5lib>=1.1
+
+streamlit>=1.30.0
+pytest>=8.0
+
+# ── API (Phase 2D) ──────────────────────────────────────────────────────────
+fastapi>=0.110
+uvicorn>=0.29
+httpx>=0.27
+# Starlette's TestClient prefers httpx2; installing it removes the
+# "Using httpx with starlette.testclient is deprecated" warning in tests.
+httpx2>=2.0
+
+# ── Database (Phase 2F Step 2) ──────────────────────────────────────────────
+# Async PostgreSQL ORM + driver + migrations. The application still runs fully
+# in-memory until persistence lands (DATABASE_URL is optional for now).
+sqlalchemy[asyncio]>=2.0
+asyncpg>=0.29
+alembic>=1.13
+
+# ── Authentication (Phase 2F Step 3) ────────────────────────────────────────
+# Argon2id password hashing + JWT access tokens (HttpOnly cookie transport).
+argon2-cffi>=23.1
+PyJWT>=2.8
+# Test-only async SQLite driver — lets the auth tests run against an isolated
+# local database without requiring a PostgreSQL instance.
+aiosqlite>=0.19
 
 ipykernel

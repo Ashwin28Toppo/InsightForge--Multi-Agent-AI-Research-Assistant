@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Virtual Environment
 .venv/
@@ -8,6 +9,23 @@ venv/
 
 # Environment Variables
 .env
+.env.local
+.env.production
+
+# Production secrets (deployment)
+deploy/.env.production
+deploy/.env.prod.*
+
+# Deployment log (runtime record on the server)
+deploy/deployments.log
+
+# RAG / local storage
+qdrant_storage/
+data/
+backend/storage/
+
+# Database backups (pg_dump output)
+backup/
 
 # IDE
 .vscode/
@@ -15,3 +33,6 @@ venv/
 
 # OS Files
 .DS_Store
+
+# Logs
+*.log
