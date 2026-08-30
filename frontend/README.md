@@ -1,23 +1,18 @@
-# InsightForge — Frontend
+﻿# InsightForge â€” Frontend
 
-The Phase 2E frontend for the InsightForge multi-agent research workstation.
-Next.js (App Router) + TypeScript + Tailwind CSS v4.
+Next.js (App Router) + TypeScript + Tailwind CSS v4 frontend for the InsightForge research assistant.
 
-> **Status: real FastAPI integration.** The frontend talks to the FastAPI
-> backend over HTTP (`POST /research`, status, progress) and Server-Sent
-> Events (`/research/{job_id}/stream`) with reconnection + a polling fallback.
-> Completed research is archived to localStorage. Pipeline stage labels live in
-> `lib/constants/pipeline.ts`; there is no mock data module.
+Communicates with the FastAPI backend over HTTP and Server-Sent Events (SSE) for live research progress.
 
-## Getting started
+## Getting Started
 
 1. Start the FastAPI backend (see the repo root README):
    ```bash
    cd ..   # repo root
    .venv/Scripts/python.exe -m uvicorn backend.app.api:app --host 127.0.0.1 --port 8000
    ```
-2. Frontend (backend base URL via `NEXT_PUBLIC_API_BASE_URL`, defaults to
-   `http://127.0.0.1:8000`):
+
+2. Install dependencies and start the dev server:
    ```bash
    npm install
    npm run dev        # http://localhost:3000
@@ -25,23 +20,24 @@ Next.js (App Router) + TypeScript + Tailwind CSS v4.
    npm run build      # production build
    npm run start      # serve the production build
    ```
-   Copy `frontend/.env.example` to `.env.local` to override the base URL.
+
+   Copy `frontend/.env.example` to `.env.local` to override the backend base URL (`NEXT_PUBLIC_API_BASE_URL`, defaults to `http://127.0.0.1:8000`).
 
 ## Routes
 
 | Route | Page |
 |---|---|
-| `/` | Landing — composer, pipeline overview, recent inquiries |
-| `/research/[jobId]` | Research workspace — live progress / report / failed states |
+| `/` | Landing â€” research composer, pipeline overview, recent inquiries |
+| `/research/[jobId]` | Research workspace â€” live progress, report, and error states |
 | `/history` | Research history (localStorage) |
 | `/history/[jobId]` | Archived snapshot detail |
 
-## Structure
+## Project Structure
 
 ```
 app/                    # App Router pages (home, research workspace, history)
 components/
-  layout/               # AppShell, Sidebar-in-AppShell, BottomTabBar, TraceabilityRail
+  layout/               # AppShell, Sidebar, BottomTabBar, TraceabilityRail
   progress/             # ProgressTimeline (dynamic stage array)
   report/               # ReportViewer + MarkdownRenderer
   evidence/             # EvidencePanel / EvidenceCard
@@ -52,41 +48,32 @@ components/
   history/              # HistoryItem
   research/             # ResearchComposer
 lib/
-  api/                  # fetch wrapper + typed API functions
-  sse/                  # isolated SSE client (EventSource + backoff)
-  types/api.ts          # API + SSE TypeScript contracts (mirror backend)
-  constants/pipeline.ts # static pipeline stage labels/descriptions
-  history/store.ts      # localStorage history
-  utils/url.ts          # domain extraction
+  api/                  # Fetch wrapper + typed API functions
+  sse/                  # Isolated SSE client (EventSource + exponential backoff)
+  types/api.ts          # API + SSE TypeScript contracts (mirrors backend)
+  constants/pipeline.ts # Static pipeline stage labels/descriptions
+  history/store.ts      # localStorage research history
+  utils/url.ts          # Domain extraction utilities
 hooks/                  # useHealth, useResearchJob, useResearchStream
 ```
 
-## Design system
+## Design System
 
-- Cool professional palette (graphite/charcoal, muted indigo/blue/cyan) —
-  the legacy orange/amber identity is intentionally **not** used.
-- Design tokens centralized in `app/globals.css` (`@theme`) — do not scatter
-  hardcoded colors.
+- Color palette: graphite/charcoal, muted indigo/blue/cyan.
+- Design tokens centralized in `app/globals.css` (`@theme`) â€” do not use hardcoded colors.
 - Typography: Syne (display), DM Sans (body), DM Mono (technical metadata).
 
-## Backend
+## Backend Integration
 
-The FastAPI backend lives at `../backend` and is **read-only** for frontend
-work. See the API contract in `lib/types/api.ts` and the handoff docs at the
-repo root (`API_FOR_FRONTEND.md`).
+The FastAPI backend lives at `../backend`. The API contract is typed in `lib/types/api.ts`.
 
-### Integration notes
+Key integration points:
 
-- `lib/api/client.ts` — shared fetch wrapper (base URL, JSON, `X-Request-ID`,
-  typed `ApiError` exposing the server request id).
-- `lib/api/research.ts` / `lib/api/health.ts` — typed endpoint functions.
-- `lib/sse/research-stream.ts` — native `EventSource` client with exponential
-  backoff reconnection (never creates a new job), terminal-event handling,
-  and a max-attempt cap that falls back to polling.
-- `hooks/useResearchStream.ts` — SSE + progress-poll fallback (polling only
-  when the stream is not open), stops at terminal/404.
-- `hooks/useResearchJob.ts` — status/result fetch + `refresh()`; result is
-  normalized by `lib/utils/normalize.ts` (defensive, never crashes on missing
-  fields).
-- History: `lib/history/store.ts` (localStorage) is written on completion and
-  read by `/history`, `/history/[jobId]`, and the home page.
+| File | Purpose |
+|---|---|
+| `lib/api/client.ts` | Shared fetch wrapper â€” base URL, JSON, `X-Request-ID`, typed `ApiError` |
+| `lib/api/research.ts` / `lib/api/health.ts` | Typed endpoint functions |
+| `lib/sse/research-stream.ts` | Native `EventSource` client with exponential backoff reconnection; never creates a new job on reconnect |
+| `hooks/useResearchStream.ts` | SSE + polling fallback (polling only when stream is not open); stops at terminal states or 404 |
+| `hooks/useResearchJob.ts` | Status/result fetch with `refresh()`; result normalized by `lib/utils/normalize.ts` |
+| `lib/history/store.ts` | localStorage history â€” written on job completion, read by `/history` and the home page |

@@ -1,8 +1,6 @@
-# InsightForge — Production Deployment (single server)
+# InsightForge — Production Deployment
 
-Deploys the existing Docker Compose stack (Caddy, PostgreSQL, FastAPI backend,
-Next.js frontend, Qdrant) on a single server running Docker with Compose v2.
-No Kubernetes, no cloud-specific services — simple and reproducible.
+Deploys the full Docker Compose stack (Caddy, PostgreSQL, FastAPI backend, Next.js frontend, Qdrant) on a single server running Docker with Compose v2.
 
 ## Architecture
 
@@ -207,14 +205,12 @@ attempt, with a status:
   keeps serving the last good build; check `docker compose -p insightforge-prod ps`
   and the deploy log, then re-run `deploy/deploy.sh` or roll back.
 
-## Requirements / notes
+## Requirements
 
-- Docker Engine + Compose v2 on the server; `postgres:16-alpine` (pinned).
-- A real public domain + DNS A record + open ports 80/443 are required for a
-  trusted Let's Encrypt certificate. Until then, `DOMAIN=localhost` gives
-  HTTPS with an internal (untrusted) certificate for local verification.
+- Docker Engine + Compose v2 on the server.
+- A public domain with a DNS A record pointing at the server's public IP.
+- Open firewall ports **80** and **443** (Let's Encrypt validates via HTTP-01 on port 80).
+- Strong secrets for `POSTGRES_PASSWORD` and `AUTH_JWT_SECRET` (generate with `openssl rand -base64 32`).
 - PostgreSQL and Qdrant are internal-only and never published to the host.
-- The stack has Docker healthchecks, structured logging, a health-check
-  script, and backup scripts; automated CI/CD (GitHub Actions) is set up in
-  `.github/workflows/`.
+- All persistent data (database, vector index, TLS certificates) lives in named Docker volumes — never in the Git repository.
 
