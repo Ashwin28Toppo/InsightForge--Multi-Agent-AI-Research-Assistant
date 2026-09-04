@@ -1,94 +1,129 @@
-﻿# InsightForge â€” Multi-Agent AI Research Assistant
+# InsightForge — Multi-Agent AI Research Assistant
 
-> Submit a research question and a team of specialized AI agents plans, searches the web, extracts evidence, fact-checks claims, and writes a structured, cited report â€” streamed live to your browser.
+InsightForge is an AI-powered research assistant that uses a team of specialized agents to research questions, gather web evidence, fact-check claims, and generate structured reports with citations.
 
----
+Research progress is streamed live to the browser while the agents work.
 
-## Key Features
+## Features
 
-- **Multi-agent research pipeline** â€” LangGraph orchestrates 9 specialized agents: planner, researcher, evidence extractor, claim extractor, fact-checker, citator, confidence scorer, writer, and critic
-- **AI-generated reports with citations** â€” every report includes numbered sources, verified claims, and a confidence rating
-- **Live progress streaming** â€” real-time research updates delivered over Server-Sent Events (SSE)
-- **Web search integration** â€” Tavily powers live web research during each job
-- **User authentication** â€” JWT-based auth with secure HTTP-only cookies
-- **Research history** â€” completed jobs are persisted and queryable
-- **Persistent storage** â€” PostgreSQL for job data, Qdrant for vector/RAG retrieval
-- **Containerized deployment** â€” full stack runs via Docker Compose behind a Caddy reverse proxy with automatic HTTPS
+* **Multi-agent research pipeline** — LangGraph coordinates 9 specialized agents:
 
----
+  * Planner
+  * Researcher
+  * Evidence Extractor
+  * Claim Extractor
+  * Fact Checker
+  * Citator
+  * Confidence Scorer
+  * Writer
+  * Critic
+
+* **AI-generated research reports** — Structured reports with citations, verified claims, and confidence scores.
+
+* **Live research updates** — Real-time progress streaming using Server-Sent Events (SSE).
+
+* **Web research** — Tavily provides live web search during research jobs.
+
+* **Authentication** — JWT-based authentication with secure HTTP-only cookies.
+
+* **Research history** — Completed research jobs are stored and can be accessed later.
+
+* **RAG support** — Qdrant is used for vector storage and retrieval.
+
+* **Persistent database** — PostgreSQL stores application and research data.
+
+* **Docker deployment** — The complete application can be deployed using Docker Compose and Caddy.
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| **Frontend** | Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS v4 |
-| **Backend** | FastAPI, Python, Uvicorn |
-| **AI / LLM** | LangGraph (multi-agent pipeline), Groq (`llama-3.1-8b-instant`) |
-| **Web Search** | Tavily API |
-| **Embeddings** | Google Gemini (`gemini-embedding-2`) |
-| **Database** | PostgreSQL 16 (via SQLAlchemy + Alembic) |
-| **Vector Database** | Qdrant |
-| **Reverse Proxy** | Caddy (automatic HTTPS via Let's Encrypt) |
-| **Containerization** | Docker, Docker Compose |
-
----
+| Layer            | Technology                                        |
+| ---------------- | ------------------------------------------------- |
+| Frontend         | Next.js 15, React 19, TypeScript, Tailwind CSS v4 |
+| Backend          | FastAPI, Python, Uvicorn                          |
+| AI / Agents      | LangGraph, LangChain                              |
+| LLM              | Groq — `llama-3.1-8b-instant`                     |
+| Web Search       | Tavily API                                        |
+| Embeddings       | Google Gemini — `gemini-embedding-2`              |
+| Database         | PostgreSQL 16                                     |
+| ORM / Migrations | SQLAlchemy, Alembic                               |
+| Vector Database  | Qdrant                                            |
+| Reverse Proxy    | Caddy                                             |
+| Containerization | Docker, Docker Compose                            |
 
 ## Architecture
 
 ```text
-User (browser)
-      â†“
-Next.js Frontend  (port 3000/3001)
-      â†“  POST /research  |  SSE /research/{id}/stream
-FastAPI Backend   (port 8000)
-      â†“
-LangGraph Pipeline
-  plan â†’ research â†’ evidence â†’ claim_extraction
-       â†’ fact_check â†’ citation â†’ confidence â†’ writer â†’ critic
-      â†“                    â†“
-Groq LLM             Tavily Web Search
-      â†“
+User
+  │
+  ▼
+Next.js Frontend
+  │
+  │ POST /research
+  │ SSE /research/{id}/stream
+  ▼
+FastAPI Backend
+  │
+  ▼
+LangGraph Research Pipeline
+  │
+  ├── Planner
+  ├── Researcher ──────────► Tavily Web Search
+  ├── Evidence Extractor
+  ├── Claim Extractor
+  ├── Fact Checker
+  ├── Citator
+  ├── Confidence Scorer
+  ├── Writer
+  └── Critic
+          │
+          ▼
+    Groq LLM
+          │
+          ▼
 PostgreSQL + Qdrant
 ```
 
-All services are routed through **Caddy** in production (ports 80/443 only). The backend, frontend, PostgreSQL, and Qdrant are internal to the Docker network.
-
----
+In production, Caddy acts as the reverse proxy and handles HTTPS. The frontend, backend, PostgreSQL, and Qdrant services run inside the Docker network.
 
 ## Project Structure
 
+```text
+InsightForge/
+├── backend/
+│   ├── app/
+│   │   ├── api.py          # API endpoints and SSE streaming
+│   │   ├── agents/         # AI agent implementations
+│   │   ├── graph/          # LangGraph state and workflow
+│   │   ├── rag/            # RAG and vector retrieval
+│   │   ├── tools/          # Search and scraping tools
+│   │   └── core/           # Configuration and settings
+│   └── alembic/             # Database migrations
+│
+├── frontend/                # Next.js application
+├── deploy/                  # Production deployment configuration
+├── scripts/                 # Backup, restore, and health checks
+├── docker-compose.yml
+├── .env.example
+└── requirements.txt
 ```
-insightforge/
-â”œâ”€â”€ backend/          # FastAPI application + LangGraph pipeline
-â”‚   â”œâ”€â”€ app/
-â”‚   â”‚   â”œâ”€â”€ api.py        # HTTP endpoints, SSE, job lifecycle
-â”‚   â”‚   â”œâ”€â”€ agents/       # Individual agent implementations
-â”‚   â”‚   â”œâ”€â”€ graph/        # LangGraph state, nodes, compiled graph
-â”‚   â”‚   â”œâ”€â”€ rag/          # RAG ingestion, chunking, embeddings, vector store
-â”‚   â”‚   â”œâ”€â”€ tools/        # Web search (Tavily) and scraping utilities
-â”‚   â”‚   â””â”€â”€ core/         # Configuration (pydantic-settings)
-â”‚   â””â”€â”€ alembic/      # Database migrations
-â”œâ”€â”€ frontend/         # Next.js frontend (App Router)
-â”œâ”€â”€ deploy/           # Production deployment config (Caddy, env templates)
-â”œâ”€â”€ scripts/          # Backup, restore, and health-check scripts
-â”œâ”€â”€ docker-compose.yml
-â”œâ”€â”€ .env.example      # Environment variable template
-â””â”€â”€ requirements.txt
-```
-
----
 
 ## Getting Started
 
 ### Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
-- API keys for Groq, Tavily, and Google Gemini
+Install:
+
+* Docker
+* Docker Compose
+* Groq API key
+* Tavily API key
+* Google Gemini API key
 
 ### 1. Clone the repository
 
 ```bash
 git clone https://github.com/Ashwin28Toppo/InsightForge--Multi-Agent-AI-Research-Assistant.git
+
 cd InsightForge--Multi-Agent-AI-Research-Assistant
 ```
 
@@ -96,8 +131,11 @@ cd InsightForge--Multi-Agent-AI-Research-Assistant
 
 ```bash
 cp .env.example .env
-# Open .env and fill in your API keys and secrets
 ```
+
+Open `.env` and add your API keys and other required configuration.
+
+> Never commit real API keys or secrets to the repository.
 
 ### 3. Start the application
 
@@ -105,73 +143,111 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-### 4. Apply database migrations
+### 4. Run database migrations
 
 ```bash
 docker compose exec backend sh -c "cd /app/backend && alembic upgrade head"
 ```
 
-### 5. Access the app
+### 5. Open the application
 
-| Service | URL |
-|---|---|
-| Frontend | http://localhost:3001 |
-| Backend API | http://localhost:8000 |
-| API Docs (Swagger) | http://localhost:8000/docs |
-
----
+| Service          | URL                        |
+| ---------------- | -------------------------- |
+| Frontend         | http://localhost:3001      |
+| Backend API      | http://localhost:8000      |
+| Swagger API Docs | http://localhost:8000/docs |
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and configure the following. **Never commit real secrets.**
+Copy `.env.example` to `.env` and configure the required variables.
 
-| Variable | Required | Description |
-|---|---|---|
-| `GROQ_API_KEY` | âœ… | LLM provider (Groq) |
-| `TAVILY_API_KEY` | âœ… | Web search |
-| `GOOGLE_API_KEY` | âœ… | Gemini embeddings (RAG) |
-| `AUTH_JWT_SECRET` | âœ… | JWT signing secret â€” use a strong random value in production |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Compose | PostgreSQL credentials |
-| `NEXT_PUBLIC_API_BASE_URL` | Frontend | Browser-facing backend URL (default: `http://localhost:8000`) |
+| Variable                   | Required | Purpose             |
+| -------------------------- | -------- | ------------------- |
+| `GROQ_API_KEY`             | Yes      | Groq LLM access     |
+| `TAVILY_API_KEY`           | Yes      | Web search          |
+| `GOOGLE_API_KEY`           | Yes      | Gemini embeddings   |
+| `AUTH_JWT_SECRET`          | Yes      | JWT signing secret  |
+| `POSTGRES_USER`            | Compose  | PostgreSQL username |
+| `POSTGRES_PASSWORD`        | Compose  | PostgreSQL password |
+| `POSTGRES_DB`              | Compose  | PostgreSQL database |
+| `NEXT_PUBLIC_API_BASE_URL` | Frontend | Backend API URL     |
 
-See `.env.example` for all optional tuning parameters (model settings, TTL, CORS, etc.).
+Additional configuration options are available in `.env.example`, including model settings, CORS, TTL, and other application settings.
 
----
+## Local Development
 
-## Local Development (without Docker)
+Docker is recommended for running the complete application, but the backend and frontend can also be started separately.
+
+### Backend
 
 ```bash
-# Backend
 .venv/Scripts/python.exe -m uvicorn backend.app.api:app --host 127.0.0.1 --port 8000
-
-# Frontend (from frontend/)
-npm install
-npm run dev   # http://localhost:3000
 ```
 
-> Without `DATABASE_URL` set, the backend runs in-memory mode (no PostgreSQL needed).
+### Frontend
 
----
+```bash
+cd frontend
+
+npm install
+npm run dev
+```
+
+The frontend will be available at:
+
+```text
+http://localhost:3000
+```
+
+If `DATABASE_URL` is not configured, the backend can run using in-memory storage for local development.
 
 ## Production Deployment
 
-Full production deployment uses the `deploy/` directory with a dedicated env file:
+Production deployment is configured through the `deploy/` directory.
 
 ```bash
 cp deploy/.env.production.example deploy/.env.production
-# Fill in DOMAIN, strong POSTGRES_PASSWORD, AUTH_JWT_SECRET, and API keys
-
-docker compose --env-file deploy/.env.production -p insightforge-prod up -d --build
-docker compose -p insightforge-prod exec backend sh -c "cd /app/backend && alembic upgrade head"
 ```
 
-Caddy automatically provisions a trusted TLS certificate via Let's Encrypt when `DOMAIN` is set to a real domain with a DNS A record pointing to the server. See `deploy/README.md` for full operations documentation.
+Configure:
 
----
+* `DOMAIN`
+* `POSTGRES_PASSWORD`
+* `AUTH_JWT_SECRET`
+* Groq API key
+* Tavily API key
+* Google API key
+
+Then start the production stack:
+
+```bash
+docker compose \
+  --env-file deploy/.env.production \
+  -p insightforge-prod \
+  up -d --build
+```
+
+Run database migrations:
+
+```bash
+docker compose \
+  -p insightforge-prod \
+  exec backend sh -c "cd /app/backend && alembic upgrade head"
+```
+
+Caddy automatically manages HTTPS certificates through Let's Encrypt when the configured domain points to the server.
+
+For detailed deployment and maintenance instructions, see [`deploy/README.md`](deploy/README.md).
 
 ## Future Improvements
 
-- Support for additional LLM providers (OpenAI, Anthropic)
-- User-facing document upload for RAG (private knowledge base)
-- Exportable reports (PDF, Markdown download)
-- Multi-user workspaces and shared research history
+* Additional LLM providers such as OpenAI and Anthropic
+* User document uploads for private RAG knowledge bases
+* PDF and Markdown report exports
+* Multi-user workspaces
+* Shared research history
+* Improved research evaluation and agent performance monitoring
+
+## License
+
+This project is intended for educational and research purposes.
