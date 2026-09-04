@@ -83,7 +83,7 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
               IF
             </div>
             {!sidebarCollapsed && (
-              <span className="font-bold text-lg tracking-tight bg-gradient-to-r from-foreground to-muted-foreground bg-clip-text text-transparent">
+              <span className="font-bold text-lg tracking-tight bg-linear-to-r from-foreground to-muted-foreground bg-clip-text text-transparent">
                 InsightForge
               </span>
             )}
