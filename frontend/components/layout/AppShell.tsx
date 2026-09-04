@@ -20,7 +20,6 @@ import { useAuth } from "@/lib/auth/auth-context";
 
 interface AppShellProps {
   children: React.ReactNode;
-  /** Optional override (e.g. error pages); defaults to the live /health check. */
   healthStatus?: "online" | "offline" | "checking";
 }
 
@@ -67,20 +66,17 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
-      {/* Mobile Sidebar overlay */}
       {sidebarOpen && (
             <div
         />
       )}
 
-      {/* Sidebar Container */}
       <aside 
         className={`fixed inset-y-0 left-0 z-50 flex flex-col bg-sidebar border-r border-sidebar-border transition-all duration-300
           lg:static lg:translate-x-0
           ${sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
           ${sidebarCollapsed ? "w-16" : "w-64"}`}
       >
-        {/* Sidebar Header */}
         <div className="h-16 flex items-center justify-between px-4 border-b border-sidebar-border">
           <Link href="/" className="flex items-center gap-2 font-syne select-none">
             <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center text-primary-foreground font-bold shadow-md shadow-primary/20">
@@ -101,7 +97,6 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
           </button>
         </div>
 
-        {/* Navigation Items */}
         <nav className="flex-1 px-3 py-4 space-y-1.5 overflow-y-auto">
           {navItems.map((item) => {
             const active = isLinkActive(item);
@@ -125,9 +120,7 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
           })}
         </nav>
 
-        {/* Sidebar Footer */}
         <div className="p-3 border-t border-sidebar-border space-y-2 bg-sidebar">
-          {/* Collapse toggle (desktop only) */}
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
             aria-pressed={sidebarCollapsed}
@@ -145,7 +138,6 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
             )}
           </button>
 
-          {/* User profile / session (Phase 2F Step 7) */}
           <div className="px-2 py-1.5 rounded-lg bg-muted/30 space-y-1.5">
             {authStatus === "authenticated" && user ? (
               <>
@@ -192,9 +184,7 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
         </div>
       </aside>
 
-      {/* Main App Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Top Header */}
         <header className="h-16 flex items-center justify-between px-6 border-b border-border bg-background/50 backdrop-blur-md">
           <div className="flex items-center gap-4">
             <button
@@ -210,7 +200,6 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
             </div>
           </div>
 
-          {/* Header Action / Health Badge */}
           <div className="flex items-center gap-4">
             <div
               className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-border bg-card text-xs font-medium"
@@ -243,13 +232,11 @@ export default function AppShell({ children, healthStatus }: AppShellProps) {
           </div>
         </header>
 
-        {/* Content Area */}
         <main className="flex-1 overflow-y-auto relative flex flex-col pb-16 lg:pb-0">
           {children}
         </main>
       </div>
 
-      {/* Mobile bottom navigation */}
       <BottomTabBar />
     </div>
   );

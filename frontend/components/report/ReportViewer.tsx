@@ -21,7 +21,6 @@ interface ReportViewerProps {
   confidence?: string;
   meta?: ReportMeta;
   onCitationRef?: (index: number) => void;
-  /** Extra header actions (e.g. copy/export already included by default). */
   headerActions?: React.ReactNode;
   className?: string;
 }
@@ -59,7 +58,6 @@ export default function ReportViewer({
 
   return (
     <div className={`bg-card border border-border rounded-xl ${className}`}>
-      {/* Report header */}
       <div className="px-6 md:px-8 py-5 border-b border-border">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
@@ -102,7 +100,6 @@ export default function ReportViewer({
           </div>
         </div>
 
-        {/* Meta counts strip */}
         {(meta?.sourceCount != null ||
           meta?.citationCount != null ||
           meta?.claimCount != null ||
@@ -125,8 +122,6 @@ export default function ReportViewer({
         )}
       </div>
 
-      {/* Reading surface — typography, not nested cards. Constrained to a
-          comfortable measure so lines stay readable on wide screens. */}
       <div className="px-6 md:px-10 py-8">
         <div className="max-w-[72ch]">
           <MarkdownRenderer markdown={report} onCitationRef={onCitationRef} />

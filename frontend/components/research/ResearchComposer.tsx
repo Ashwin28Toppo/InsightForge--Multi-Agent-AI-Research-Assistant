@@ -6,7 +6,6 @@ import { ArrowRight, Loader2, AlertCircle } from "lucide-react";
 interface ResearchComposerProps {
   onSubmit: (query: string) => void;
   isLoading?: boolean;
-  /** Server/API-level error to display inside the composer (e.g. 422, offline). */
   externalError?: string | null;
 }
 
@@ -71,7 +70,6 @@ export default function ResearchComposer({
           className="w-full bg-transparent resize-y border-0 p-4 md:p-5 text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-0 text-[15px] leading-relaxed"
         />
 
-        {/* Action row — submission is the only control; no fake toggles. */}
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 md:px-5 py-3 border-t border-border bg-muted/20 rounded-b-xl">
           <p className="text-[10px] font-mono text-muted-foreground select-none">
             <kbd className="px-1 py-0.5 rounded bg-muted border border-border">↵</kbd> run
@@ -96,7 +94,6 @@ export default function ResearchComposer({
         </div>
       </div>
 
-      {/* Error message — local validation or server/API error */}
       {(error || externalError) && (
         <div
           role="alert"

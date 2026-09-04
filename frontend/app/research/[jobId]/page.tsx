@@ -185,7 +185,6 @@ function ResearchWorkspaceContent({ jobId }: { jobId: string }) {
 
   return (
     <AppShell>
-      {/* Workspace chrome */}
       <div className="border-b border-border px-6 py-3 flex items-center justify-between gap-4 flex-wrap select-none">
         <div className="flex items-center gap-3 min-w-0">
           <span className="text-[10px] font-mono px-2 py-1 rounded bg-muted border border-border text-muted-foreground truncate">
@@ -218,7 +217,6 @@ function ResearchWorkspaceContent({ jobId }: { jobId: string }) {
         )}
       </div>
 
-      {/* Not found / expired */}
       {job.notFound ? (
         <div className="flex-1 flex items-center justify-center px-6 py-12">
           <div className="max-w-md w-full bg-card border border-border rounded-xl p-8 text-center space-y-4">
@@ -246,7 +244,6 @@ function ResearchWorkspaceContent({ jobId }: { jobId: string }) {
         </div>
       ) : (
         <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0">
-          {/* Primary column */}
           <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
             <div className="space-y-2">
               <p className="text-[10px] font-mono font-bold uppercase tracking-widest text-muted-foreground select-none">
@@ -257,7 +254,6 @@ function ResearchWorkspaceContent({ jobId }: { jobId: string }) {
               </h1>
             </div>
 
-            {/* QUEUED / RUNNING */}
             {(stream.status === "queued" || stream.status === "running") && (
               <div className="space-y-6">
                 <ProgressTimeline
@@ -270,7 +266,6 @@ function ResearchWorkspaceContent({ jobId }: { jobId: string }) {
                     Job queued — the research worker is starting.
                   </p>
                 )}
-                {/* Report skeleton while the pipeline runs */}
                 <div
                   className="bg-card border border-border rounded-xl p-6 space-y-6 animate-pulse"
                   aria-hidden="true"
@@ -289,7 +284,6 @@ function ResearchWorkspaceContent({ jobId }: { jobId: string }) {
               </div>
             )}
 
-            {/* COMPLETED */}
             {stream.status === "completed" &&
               (job.result && job.result.report ? (
                 <ReportViewer
@@ -320,7 +314,6 @@ function ResearchWorkspaceContent({ jobId }: { jobId: string }) {
                 </div>
               ))}
 
-            {/* FAILED */}
             {stream.status === "failed" && (
               <div className="border border-destructive/20 bg-destructive/5 rounded-xl p-8 text-center space-y-4 max-w-xl mx-auto my-12">
                 <div className="h-12 w-12 rounded-full bg-destructive/10 border border-destructive/30 flex items-center justify-center text-destructive mx-auto">
@@ -362,7 +355,6 @@ function ResearchWorkspaceContent({ jobId }: { jobId: string }) {
             )}
           </div>
 
-          {/* Traceability rail */}
           <TraceabilityRail
             sources={job.result?.sources}
             evidence={job.result?.evidence}

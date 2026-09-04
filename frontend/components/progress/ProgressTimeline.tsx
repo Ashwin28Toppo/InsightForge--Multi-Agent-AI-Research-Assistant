@@ -32,7 +32,6 @@ interface ProgressTimelineProps {
   completedSteps: string[];
 }
 
-/** Icon lookup by stage key; falls back to Circle for unknown/custom stages. */
 const STAGE_ICONS: Record<string, LucideIcon> = {
   plan: Layers,
   research: Search,
@@ -95,7 +94,6 @@ export default function ProgressTimeline({
       </div>
 
       <ol className="relative">
-        {/* Connector line (desktop) */}
         <div
           className="absolute top-5 left-6 right-6 h-0.5 bg-border hidden md:block"
           aria-hidden="true"
@@ -111,7 +109,6 @@ export default function ProgressTimeline({
                 key={`${stage.key}-${idx}`}
                 className="flex md:flex-col items-center gap-3 md:gap-2 text-left md:text-center"
               >
-                {/* Node bubble */}
                 <div
                   className={`h-10 w-10 rounded-full flex items-center justify-center border transition-all duration-300 relative shrink-0
                     ${status === "completed"
@@ -138,13 +135,11 @@ export default function ProgressTimeline({
                     <Icon size={16} aria-hidden="true" />
                   )}
 
-                  {/* Step index (desktop) */}
                   <span className="absolute -top-6 text-[9px] font-mono font-bold text-muted-foreground hidden md:inline select-none">
                     {String(idx + 1).padStart(2, "0")}
                   </span>
                 </div>
 
-                {/* Text details */}
                 <div className="flex-1 md:flex-none min-w-0">
                   <h3
                     className={`text-xs font-semibold font-mono tracking-tight transition-colors
@@ -167,7 +162,6 @@ export default function ProgressTimeline({
         </div>
       </ol>
 
-      {/* Current activity — answers “which stage is running right now?” */}
       <div className="mt-5 pt-4 border-t border-border flex items-center justify-between gap-3 flex-wrap">
         <p className="text-xs text-muted-foreground min-w-0">
           {activityStage ? (

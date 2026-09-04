@@ -9,7 +9,6 @@ import {
   ResearchHistoryResponse,
 } from "../types/api";
 
-/** Start a research job. Returns the created job id (HTTP 202). */
 export function submitResearch(
   query: string,
   signal?: AbortSignal
@@ -22,7 +21,6 @@ export function submitResearch(
   });
 }
 
-/** Get the current status/result of a research job (404 if unknown/expired). */
 export function getJobStatus(
   jobId: string,
   signal?: AbortSignal
@@ -32,7 +30,6 @@ export function getJobStatus(
   });
 }
 
-/** Get the live progress snapshot of a research job. */
 export function getJobProgress(
   jobId: string,
   signal?: AbortSignal
@@ -43,7 +40,6 @@ export function getJobProgress(
   );
 }
 
-/** Get the authenticated user's research history (newest first). */
 export function getResearchHistory(
   signal?: AbortSignal
 ): Promise<ResearchHistoryResponse> {

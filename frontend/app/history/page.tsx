@@ -14,7 +14,6 @@ import type { ResearchHistoryItem } from "@/lib/types/api";
 
 type StatusFilter = "all" | "completed" | "failed";
 
-/** Format an ISO timestamp defensively for display. */
 function formatDateTime(iso: string | undefined): string {
   if (!iso) return "—";
   const date = new Date(iso);
@@ -28,7 +27,6 @@ function formatDateTime(iso: string | undefined): string {
   });
 }
 
-/** Map a server history record to the shared list view model. */
 function toView(job: ResearchHistoryItem): HistoryItemView {
   return {
     jobId: job.job_id,
@@ -44,7 +42,6 @@ function toView(job: ResearchHistoryItem): HistoryItemView {
   };
 }
 
-/** Server-backed history list (rendered only when authenticated). */
 function HistoryContent() {
   const router = useRouter();
   const [items, setItems] = useState<HistoryItemView[] | null>(null);
@@ -79,7 +76,6 @@ function HistoryContent() {
 
   return (
     <div className="flex-1 max-w-5xl w-full mx-auto px-6 py-10 space-y-6">
-      {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-border">
         <div>
           <div className="flex items-center gap-2 text-xs font-mono font-bold text-muted-foreground uppercase tracking-widest">
@@ -95,7 +91,6 @@ function HistoryContent() {
         </span>
       </div>
 
-      {/* Controls */}
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search
@@ -141,7 +136,6 @@ function HistoryContent() {
         </div>
       </div>
 
-      {/* Loading */}
       {items === null && !loadError ? (
         <div className="bg-card border border-border rounded-xl p-5 space-y-4" aria-busy="true">
           <Skeleton lines={2} />

@@ -5,7 +5,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Plus, History } from "lucide-react";
 
-/** Mobile bottom navigation (visible < lg). */
 export default function BottomTabBar() {
   const pathname = usePathname();
 

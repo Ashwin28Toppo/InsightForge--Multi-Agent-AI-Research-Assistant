@@ -64,7 +64,6 @@ export default function Home() {
   return (
     <AppShell>
       <div className="flex-1 max-w-5xl w-full mx-auto px-6 py-10 space-y-12">
-        {/* Header — restrained workstation intro, not a landing hero */}
         <section className="space-y-2">
           <p className="text-xs font-mono font-bold uppercase tracking-widest text-primary select-none">
             Research Workstation
@@ -79,7 +78,6 @@ export default function Home() {
           </p>
         </section>
 
-        {/* Composer — the primary action (Phase 2F Step 7: authenticated only) */}
         <section className="space-y-3 max-w-3xl">
           <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-muted-foreground">
             Research Query
@@ -96,7 +94,6 @@ export default function Home() {
           </AuthGate>
         </section>
 
-        {/* Pipeline overview — compact execution trace */}
         <section className="space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-muted-foreground">
@@ -130,7 +127,6 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Recent research (from local history) */}
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-muted-foreground">

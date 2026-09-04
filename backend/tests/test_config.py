@@ -2,7 +2,9 @@
 from backend.app.core.config import Settings
 
 
-def test_defaults_without_env_file():
+def test_defaults_without_env_file(monkeypatch):
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    monkeypatch.delenv("JOB_TTL_SECONDS", raising=False)
     s = Settings(_env_file=None)
     assert s.llm_model == "openai/gpt-oss-20b"
     assert s.llm_temperature == 0.0
@@ -13,7 +15,12 @@ def test_defaults_without_env_file():
     assert s.evidence_max_chars == 300
     assert s.search_snippet_max_chars == 150
     assert s.run_critic is False
-    assert s.cors_origins == ["http://localhost:3000", "http://127.0.0.1:3000"]
+    assert s.cors_origins == [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ]
     assert s.job_ttl_seconds == 3600
     assert s.tavily_max_results == 5
     assert s.scrape_max_chars == 3000
@@ -76,7 +83,12 @@ def test_cors_origins_parsed_from_comma_separated_env(monkeypatch):
 def test_cors_origins_default_when_env_absent(monkeypatch):
     monkeypatch.delenv("CORS_ORIGINS", raising=False)
     s = Settings(_env_file=None)
-    assert s.cors_origins == ["http://localhost:3000", "http://127.0.0.1:3000"]
+    assert s.cors_origins == [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ]
 
 
 def test_job_ttl_seconds_read_from_env(monkeypatch):

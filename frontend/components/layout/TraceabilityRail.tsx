@@ -24,10 +24,8 @@ interface TraceabilityRailProps {
   citations?: Citation[];
   factChecks?: FactCheck[];
   claims?: string[];
-  /** Highlight a citation (e.g. when an inline [n] is clicked). */
   activeCitation?: number | null;
   onSelectCitation?: (index: number) => void;
-  /** Optional controlled tab (defaults to internal state). */
   activeTab?: RailTab | null;
   onTabChange?: (tab: RailTab) => void;
 }
@@ -87,7 +85,6 @@ export default function TraceabilityRail({
 
   return (
     <aside className="w-full lg:w-96 border-t lg:border-t-0 lg:border-l border-border bg-sidebar flex flex-col min-w-0 h-[28rem] lg:h-auto overflow-hidden">
-      {/* Tab bar */}
       <div
         className="flex border-b border-border bg-background/30 overflow-x-auto shrink-0 select-none"
         role="tablist"
@@ -127,7 +124,6 @@ export default function TraceabilityRail({
         })}
       </div>
 
-      {/* Active panel */}
       <div
         className="flex-1 overflow-y-auto p-4 space-y-4"
         role="tabpanel"

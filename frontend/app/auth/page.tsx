@@ -10,7 +10,6 @@ import { Loader2, Lock, LogIn, Mail, UserPlus, Eye, EyeOff } from "lucide-react"
 
 type Mode = "login" | "signup";
 
-/** Auth-specific error copy (kept local so shared research errors stay generic). */
 function authErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 401) {
@@ -104,7 +103,6 @@ export default function AuthPage() {
     <AppShell>
       <div className="flex-1 flex items-center justify-center px-6 py-12">
         <div className="w-full max-w-md space-y-6">
-          {/* Header */}
           <div className="space-y-1.5 text-center">
             <p className="text-xs font-mono font-bold uppercase tracking-widest text-primary select-none">
               InsightForge Access
@@ -118,7 +116,6 @@ export default function AuthPage() {
             </p>
           </div>
 
-          {/* Mode tabs */}
           <div
             className="flex items-center gap-1 p-1 rounded-xl bg-card border border-border"
             role="tablist"
@@ -155,7 +152,6 @@ export default function AuthPage() {
             })}
           </div>
 
-          {/* Form */}
           <form
             onSubmit={handleSubmit}
             className="bg-card border border-border rounded-xl p-6 space-y-4"

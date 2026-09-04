@@ -10,25 +10,19 @@ export interface HistoryItemView {
   jobId: string;
   query: string;
   status: JobStatus;
-  /** Created-at timestamp, pre-formatted for display. */
   date: string;
-  /** Updated-at timestamp, pre-formatted for display. */
   updatedAt?: string;
   duration?: string;
   confidence?: string;
   snippet?: string;
-  /** Most recent completed pipeline stage (server-provided). */
   currentStep?: string;
-  /** Ordered completed pipeline stages (server-provided). */
   completedSteps?: string[];
-  /** Safe error message for failed jobs (server-provided). */
   error?: string;
 }
 
 interface HistoryItemProps {
   item: HistoryItemView;
   onOpen: (jobId: string) => void;
-  /** When omitted, no delete affordance is rendered (server-backed history). */
   onDelete?: (jobId: string) => void;
 }
 
@@ -107,7 +101,6 @@ export default function HistoryItem({ item, onOpen, onDelete }: HistoryItemProps
           </p>
         )}
 
-        {/* Progress / error metadata (server-provided) */}
         {(item.currentStep || stepCount > 0) && (
           <div className="flex items-center gap-1.5 flex-wrap">
             {item.currentStep && (
@@ -132,7 +125,6 @@ export default function HistoryItem({ item, onOpen, onDelete }: HistoryItemProps
         )}
       </div>
 
-      {/* Right side status/actions */}
       <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start w-full sm:w-auto shrink-0 gap-3 border-t sm:border-t-0 border-border pt-3 sm:pt-0">
         <div className="flex items-center gap-2">
           <StatusBadge status={item.status} />

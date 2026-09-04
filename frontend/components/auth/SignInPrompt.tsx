@@ -9,11 +9,6 @@ interface SignInPromptProps {
   body?: string;
 }
 
-/**
- * Centered sign-in prompt for authenticated surfaces. Rendered by pages when
- * there is no session; the backend remains the authority (it 401s without a
- * valid cookie). Never exposes any user data.
- */
 export default function SignInPrompt({
   title = "Sign in required",
   body = "This workspace is authenticated. Sign in to start research and access your research history.",

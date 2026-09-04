@@ -12,7 +12,6 @@ import type { AuthRequest, UserResponse } from "../types/api";
  * accept the Set-Cookie response, which is all this code relies on.
  */
 
-/** Register a new user; the backend sets the access cookie on success. */
 export function signup(payload: AuthRequest): Promise<UserResponse> {
   return apiFetch<UserResponse>("/auth/signup", {
     method: "POST",
@@ -20,7 +19,6 @@ export function signup(payload: AuthRequest): Promise<UserResponse> {
   });
 }
 
-/** Log in; the backend sets the access cookie on success. */
 export function login(
   payload: Pick<AuthRequest, "email" | "password">
 ): Promise<UserResponse> {
@@ -30,12 +28,10 @@ export function login(
   });
 }
 
-/** Resolve the current session (401 when there is no valid cookie). */
 export function getCurrentUser(signal?: AbortSignal): Promise<UserResponse> {
   return apiFetch<UserResponse>("/auth/me", { signal });
 }
 
-/** Clear the session cookie (idempotent — safe when already signed out). */
 export function logout(): Promise<void> {
   return apiFetch<void>("/auth/logout", { method: "POST" });
 }

@@ -5,7 +5,6 @@ import { ShieldCheck, ShieldX, SearchCheck, HelpCircle, CheckCircle2 } from "luc
 import type { FactCheck } from "@/lib/types/api";
 import EmptyState from "@/components/feedback/EmptyState";
 
-/** Verdict badge — icon + text, never color alone. */
 export function VerdictBadge({ verdict }: { verdict?: string }) {
   const v = verdict ? verdict.toLowerCase() : "";
 

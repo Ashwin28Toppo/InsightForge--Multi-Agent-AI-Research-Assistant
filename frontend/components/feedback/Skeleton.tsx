@@ -7,7 +7,6 @@ interface SkeletonProps {
   lines?: number;
 }
 
-/** Shimmer placeholder that mirrors the final layout shape. */
 export default function Skeleton({ className = "", lines = 3 }: SkeletonProps) {
   return (
     <div className={`animate-pulse space-y-3 ${className}`} aria-hidden="true">

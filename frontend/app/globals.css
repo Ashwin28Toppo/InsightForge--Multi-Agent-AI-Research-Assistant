@@ -1,29 +1,24 @@
 @import "tailwindcss";
 
 :root {
-  /* Graphite / Charcoal core palette */
   --background: #090a0f;
   --foreground: #f1f5f9;
   
-  /* Surfaces and Cards */
   --card: #11131c;
   --card-foreground: #f1f5f9;
   --popover: #11131c;
   --popover-foreground: #f1f5f9;
   
-  /* Primary Accent: Indigo & Secondary: Muted Blue/Cyan */
   --primary: #6366f1;
   --primary-foreground: #ffffff;
   --secondary: #1e293b;
   --secondary-foreground: #f1f5f9;
   
-  /* Muted Text / Accents */
   --muted: #161822;
   --muted-foreground: #94a3b8;
   --accent: #1e293b;
   --accent-foreground: #f1f5f9;
   
-  /* Utility states */
   --destructive: #ef4444;
   --destructive-foreground: #ffffff;
   --success: #10b981;
@@ -33,14 +28,12 @@
   --info: #06b6d4;
   --info-foreground: #ffffff;
   
-  /* Borders and Interactive */
   --border: #1e2330;
   --border-strong: #2e3448;
   --input: #11131c;
   --ring: #6366f1;
   --radius: 12px;
 
-  /* Sidebar styling */
   --sidebar: #07080c;
   --sidebar-border: #141722;
 }
@@ -78,13 +71,11 @@
   --color-sidebar: var(--sidebar);
   --color-sidebar-border: var(--sidebar-border);
   
-  /* Custom Fonts */
   --font-syne: var(--font-syne), sans-serif;
   --font-sans: var(--font-dm-sans), sans-serif;
   --font-mono: var(--font-dm-mono), monospace;
 }
 
-/* Global resets & customizations */
 html, body {
   background: var(--background);
   color: var(--foreground);
@@ -99,7 +90,6 @@ body {
   background-attachment: fixed;
 }
 
-/* Custom Scrollbar for Workstation density */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -118,7 +108,6 @@ body {
   background: var(--border-strong);
 }
 
-/* Custom animated gradient border for active runs */
 @keyframes border-pulse {
   0%, 100% {
     border-color: var(--border);
@@ -132,7 +121,6 @@ body {
   animation: border-pulse 2s infinite ease-in-out;
 }
 
-/* Pulse animation for active running step */
 @keyframes stage-pulse {
   0%, 100% {
     opacity: 0.4;

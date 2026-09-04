@@ -4,7 +4,6 @@ import React from "react";
 import { Gauge, TrendingUp, Minus, HelpCircle } from "lucide-react";
 
 interface ConfidenceBadgeProps {
-  /** "high" | "medium" | "low" | anything else (treated as unknown). */
   confidence?: string;
   className?: string;
 }

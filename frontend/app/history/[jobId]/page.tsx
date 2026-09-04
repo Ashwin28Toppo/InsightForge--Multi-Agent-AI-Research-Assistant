@@ -16,7 +16,6 @@ import { normalizeResearchResult } from "@/lib/utils/normalize";
 import type { ResearchHistoryItem } from "@/lib/types/api";
 import type { RailTab } from "@/components/layout/TraceabilityRail";
 
-/** Format an ISO timestamp defensively for display. */
 function formatDateTime(iso: string | undefined): string {
   if (!iso) return "—";
   const date = new Date(iso);
@@ -30,7 +29,6 @@ function formatDateTime(iso: string | undefined): string {
   });
 }
 
-/** Server-backed detail (rendered only when authenticated). */
 function HistoryDetailContent({ jobId }: { jobId: string }) {
   const router = useRouter();
   const [record, setRecord] = useState<ResearchHistoryItem | null>(null);
@@ -69,7 +67,6 @@ function HistoryDetailContent({ jobId }: { jobId: string }) {
 
   return (
     <>
-      {/* Archive indicator */}
       <div className="border-b border-border px-6 py-2.5 flex items-center justify-between gap-3 text-xs text-muted-foreground select-none flex-wrap">
         <div className="flex items-center gap-2">
           <Database size={13} className="text-primary" />
@@ -133,7 +130,6 @@ function HistoryDetailContent({ jobId }: { jobId: string }) {
         </div>
       ) : (
         <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0">
-          {/* Primary column */}
           <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
             <div className="space-y-4">
               <button
@@ -218,7 +214,6 @@ function HistoryDetailContent({ jobId }: { jobId: string }) {
             )}
           </div>
 
-          {/* Traceability rail (only when a snapshot exists) */}
           {result ? (
             <TraceabilityRail
               sources={result.sources}

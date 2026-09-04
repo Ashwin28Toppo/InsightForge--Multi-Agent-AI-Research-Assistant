@@ -5,7 +5,6 @@ const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000"
 export class ApiError extends Error {
   status: number;
   detail: unknown;
-  /** Server-generated request id (X-Request-ID header), when available. */
   requestId: string | null;
 
   constructor(status: number, detail: unknown, requestId: string | null = null) {
