@@ -1,4 +1,4 @@
-# InsightForge — Multi-Agent AI Research Assistant
+﻿# InsightForge — Multi-Agent AI Research Assistant
 
 InsightForge is an AI-powered research assistant that uses a team of specialized agents to research questions, gather web evidence, fact-check claims, and generate structured reports with citations.
 
@@ -41,8 +41,9 @@ Research progress is streamed live to the browser while the agents work.
 | Frontend         | Next.js 15, React 19, TypeScript, Tailwind CSS v4 |
 | Backend          | FastAPI, Python, Uvicorn                          |
 | AI / Agents      | LangGraph, LangChain                              |
-| LLM              | Groq — `llama-3.1-8b-instant`                     |
+| LLM              | Groq — `llama-3.1-8b-instant`, OpenAI - `openai/gpt-oss-20b`                  |
 | Web Search       | Tavily API                                        |
+| RAG / Retrieval  | LangChain Qdrant, Qdrant vector search            |
 | Embeddings       | Google Gemini — `gemini-embedding-2`              |
 | Database         | PostgreSQL 16                                     |
 | ORM / Migrations | SQLAlchemy, Alembic                               |
@@ -68,6 +69,8 @@ LangGraph Research Pipeline
   │
   ├── Planner
   ├── Researcher ──────────► Tavily Web Search
+  │       │
+  │       └─────────────────► RAG Retrieval ───────► Qdrant + Gemini Embeddings
   ├── Evidence Extractor
   ├── Claim Extractor
   ├── Fact Checker
